@@ -24,6 +24,9 @@ Examples:
   # Process image file
   python run.py --source face.jpg --target photo.jpg --output result.jpg
 
+  # Several photos (or a folder) of the source person, averaged for a stabler identity
+  python run.py --source C:/photos/person/ --webcam
+
   # Live webcam mode (CLI)
   python run.py --source face.jpg --webcam
 
@@ -34,7 +37,8 @@ Examples:
 
     # Input/Output arguments
     parser.add_argument(
-        "-s", "--source", type=str, help="Path to source image (face to swap from)"
+        "-s", "--source", nargs="+",
+        help="Source photo(s) or folder(s) of the face to swap from; several photos are averaged",
     )
 
     parser.add_argument("-t", "--target", type=str, help="Path to target image file")
@@ -73,7 +77,6 @@ def launch_gui():
 
 def run_cli(args):
     """Run CLI mode based on arguments"""
-    import cv2
     from core.face_analyser import get_face_analyser, get_live_face_analyser
 
     # Validate source image
@@ -81,28 +84,16 @@ def run_cli(args):
         print("Error: --source argument is required for CLI mode")
         sys.exit(1)
 
-    source_path = Path(args.source)
-    if not source_path.exists():
-        print(f"Error: Source image not found: {args.source}")
+    from core.source_faces import build_source_identity
+
+    print(f"Loading source photo(s): {', '.join(args.source)}")
+    try:
+        identity = build_source_identity(args.source, get_face_analyser())
+    except ValueError as e:
+        print(f"Error: {e}")
         sys.exit(1)
-
-    # Load source image and extract face
-    print(f"Loading source image: {args.source}")
-    source_img = cv2.imread(str(source_path))
-    if source_img is None:
-        print(f"Error: Failed to load source image: {args.source}")
-        sys.exit(1)
-
-    print("Analyzing source face...")
-    face_analyser = get_face_analyser()
-    source_faces = face_analyser.get(source_img)
-
-    if len(source_faces) == 0:
-        print("Error: No face detected in source image")
-        sys.exit(1)
-
-    source_face = source_faces[0]
-    print("✓ Source face detected")
+    source_face = identity.face
+    print(f"✓ Source face: {identity.summary()}")
 
     # Target frames only need detection + landmarks
     face_analyser = get_live_face_analyser()
@@ -207,6 +198,10 @@ def setup_logging():
 
 def main():
     """Main entry point - routes to GUI or CLI based on arguments"""
+    # Windows consoles/pipes default to cp1252, which can't print "✓" and would crash the CLI
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     setup_logging()
 
     args = parse_arguments()

@@ -6,6 +6,7 @@ A professional PyQt6 application for live deepfake face swapping
 import sys
 import logging
 import cv2
+import numpy as np
 import json
 from pathlib import Path
 
@@ -1045,57 +1046,56 @@ class DeepfakeApp(QMainWindow):
                 self.status_label.setText(f"Selected Camera {self.selected_camera_index}")
 
     def select_source_image(self):
-        """Open file dialog to select source image for live mode"""
-        file_path, _ = QFileDialog.getOpenFileName(
+        """Select one or more photos of the source person for live mode.
+
+        Several photos (e.g. front, left, right, up, down) are combined into one averaged
+        identity, which is more stable than a single photo; photos without a face or that
+        don't match the others are skipped.
+        """
+        file_paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Select Source Image",
+            "Select Source Photo(s) - select several photos of the same person for a better match",
             self.working_dir,
-            "Image Files (*.png *.jpg *.jpeg *.bmp)",
+            "Image Files (*.png *.jpg *.jpeg *.bmp *.webp)",
         )
 
-        if file_path:
+        if file_paths:
             try:
-                # Show loading indicator
-                self.status_label.setText("Loading source image...")
+                from core.source_faces import build_source_identity
+
+                self.status_label.setText(f"Analyzing {len(file_paths)} photo(s)...")
                 QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
                 QApplication.processEvents()  # Keep UI responsive
 
-                # Load image
-                self.source_image = cv2.imread(file_path)
-                if self.source_image is None:
-                    raise ValueError("Failed to load image")
-
-                # Extract face from source image
-                self.status_label.setText("Analyzing face...")
-                QApplication.processEvents()
-                face_analyser = get_face_analyser()
-                faces = face_analyser.get(self.source_image)
-
-                if len(faces) == 0:
+                try:
+                    identity = build_source_identity(file_paths, get_face_analyser())
+                except ValueError as e:
                     QApplication.restoreOverrideCursor()
-                    QMessageBox.warning(
-                        self,
-                        "No Face Detected",
-                        "No face was detected in the selected image. Please choose an image with a clear face.",
-                    )
+                    QMessageBox.warning(self, "No Face Detected", f"{e} Please choose photos with a clear face.")
                     self.status_label.setText("Ready")
                     return
 
-                # Use the first detected face
-                self.source_face = faces[0]
+                self.source_identity = identity
+                self.source_face = identity.face
+                self.source_image = cv2.imdecode(np.fromfile(str(identity.preview_path), np.uint8), cv2.IMREAD_COLOR)
 
                 # Display preview
                 self.display_source_preview(self.source_image, self.source_preview)
-                self.source_status.setText("✓ Face detected")
+                used = len(identity.used)
+                self.source_status.setText(
+                    "✓ Face detected" if len(identity.photos) == 1 else f"✓ {used} of {len(identity.photos)} photos used"
+                )
+                self.source_status.setToolTip(identity.summary())
                 self.source_status.setStyleSheet("color: #4CAF50;")
                 self.btn_clear_live_source.setEnabled(True)
+                logger.info("Source identity: %s", identity.summary())
 
                 # Update video thread if running
                 if self.video_thread is not None:
                     self.video_thread.set_source_face(self.source_face)
                     self.swap_btn.setEnabled(True)
 
-                self.status_label.setText("Source image loaded successfully")
+                self.status_label.setText(identity.summary())
                 self.update_device_label()
                 QApplication.restoreOverrideCursor()
 
