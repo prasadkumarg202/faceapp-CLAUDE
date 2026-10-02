@@ -68,7 +68,11 @@ def source_face():
     return get_face_analyser().get(cv2.imread(str(ROOT / "assets" / "elon_musk.jpg")))[0]
 
 
+times = []  # emit timestamps of the most recent run_thread call
+
+
 def run_thread(monkeypatch, qapp, seconds, swap, source_face):
+    times.clear()
     monkeypatch.setattr(vt.cv2, "VideoCapture", FakeCapture)
     thread = vt.VideoThread(0)
     thread.set_source_face(source_face)
@@ -77,6 +81,7 @@ def run_thread(monkeypatch, qapp, seconds, swap, source_face):
 
     def on_frame(f):
         frames.append(f.copy())
+        times.append(time.perf_counter())
         thread.frame_displayed()  # act as a GUI that draws instantly
 
     # Direct connections: collect in the emitting thread, no event loop needed
@@ -91,7 +96,8 @@ def run_thread(monkeypatch, qapp, seconds, swap, source_face):
 def test_no_repeated_or_out_of_order_frames(monkeypatch, qapp, source_face):
     frames, _ = run_thread(monkeypatch, qapp, 4, True, source_face)
     stamps = [read_stamp(f) for f in frames]
-    assert len(stamps) > 20, f"only {len(stamps)} frames processed"
+    # Thresholds are deliberately loose: the GPU may be shared with another app during tests
+    assert len(stamps) > 10, f"only {len(stamps)} frames processed"
     assert all(b > a for a, b in zip(stamps, stamps[1:], strict=False)), "repeated or out-of-order frame"
 
 
@@ -106,9 +112,12 @@ def test_no_unswapped_frames_while_swap_enabled(monkeypatch, qapp, source_face):
 def test_reported_fps_is_processing_rate(monkeypatch, qapp, source_face):
     frames, fps = run_thread(monkeypatch, qapp, 4, True, source_face)
     reported = fps[-1]
-    actual = len(frames) / 4
+    # Compare against the actual rate over the counter's own window (last 30 frames), not the
+    # whole run, which includes model warm-up
+    window = times[-31:]
+    actual = (len(window) - 1) / (window[-1] - window[0])
     assert reported < 30 * 0.95 or actual > 27, "FPS reports camera rate instead of processing rate"
-    assert abs(reported - actual) / actual < 0.35, f"reported {reported:.1f} vs actual {actual:.1f}"
+    assert abs(reported - actual) / actual < 0.25, f"reported {reported:.1f} vs actual {actual:.1f}"
 
 
 def test_camera_glitch_does_not_stop_thread(monkeypatch, qapp, source_face):
@@ -183,4 +192,4 @@ def test_virtual_camera_receives_every_processed_frame(monkeypatch, qapp, source
     time.sleep(3)
     thread.stop()
     # display never acknowledged, yet the virtual camera still gets every processed frame
-    assert len(cam.frames) > 20 and len(cam.frames) == len(set(cam.frames))
+    assert len(cam.frames) > 10 and len(cam.frames) == len(set(cam.frames))

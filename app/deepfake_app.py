@@ -908,6 +908,10 @@ class DeepfakeApp(QMainWindow):
             if config.ENHANCE_ENABLED and not is_enhancer_ready():
                 warm_up_async()
                 self.status_label.setText("Preparing face enhancer (first time can take a minute)...")
+            elif config.ENHANCE_ENABLED:
+                self.status_label.setText("Face enhancer on")
+            else:
+                self.status_label.setText("Face enhancer off")
         self.enhance_checkbox.stateChanged.connect(_toggle_enhance)
         self.enhance_checkbox.setStyleSheet("QCheckBox { color: #ffffff; }")
         advanced_layout.addWidget(self.enhance_checkbox)
@@ -1372,6 +1376,10 @@ class DeepfakeApp(QMainWindow):
         """Update FPS display"""
         self.fps_label.setText(f"FPS: {fps:.1f}")
         self.update_device_label()
+        if self.status_label.text().startswith("Preparing face enhancer"):
+            from core.engine.face_enhancer import is_enhancer_ready
+            if is_enhancer_ready():
+                self.status_label.setText("Face enhancer ready")
 
     def update_device_label(self):
         """Show whether inference is running on GPU or has fallen back to CPU"""
