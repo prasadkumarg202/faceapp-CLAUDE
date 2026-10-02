@@ -5,6 +5,12 @@ newer GPUs run ~2.3x faster on FP16 tensor cores. A full FP16 conversion overflo
 instance-norm style blocks (ReduceMean/Sub/Sqrt/Div) and produces a black image, so only the
 Conv nodes are converted and everything else stays FP32. Inputs and outputs stay FP32, so the
 model is a drop-in replacement for insightface's INSwapper.
+
+TensorRT was evaluated (TRT 10.16, ORT 1.30, RTX 4000) and rejected: with FP16 it is fast
+(GFPGAN 24 ms, swapper 13 ms) but runs the norm layers in FP16 and corrupts the output
+(PSNR 7.5 / 20.7 dB), and ORT exposes no per-layer precision or strongly-typed mode to stop it
+(trt_layer_norm_fp32_fallback does not match these norm patterns). Without FP16 it ignores the
+FP16 Conv types and is slower than CUDA mixed precision (GFPGAN 64.5 vs 57 ms, swapper 46.5 vs 22 ms).
 """
 
 import logging
