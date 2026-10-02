@@ -1,9 +1,11 @@
-import os
+import argparse
+import io
+import time
+import zipfile
+from pathlib import Path
+
 import requests
 from tqdm import tqdm
-import argparse
-import sys
-from pathlib import Path
 
 try:
     from core import config
@@ -15,23 +17,15 @@ except ImportError:
 MODELS = {
     "inswapper_128.onnx": {
         "url": "https://huggingface.co/ezioruan/inswapper_128.onnx/resolve/main/inswapper_128.onnx",
-        "size": 554259814,
+        "size": 554253681,
         "type": "swapper",
         "required": True,
-        "description": "Face swap model (FP32)",
-        "location": "models",
-    },
-    "inswapper_128.fp16.onnx": {
-        "url": "https://huggingface.co/netrunner-exe/Insight-Swap-models/resolve/main/inswapper_128.fp16.onnx",
-        "size": 277129907,
-        "type": "swapper",
-        "required": False,
-        "description": "Face swap model (FP16, lighter)",
+        "description": "Face swap model (FP32; a faster mixed-precision copy is built locally)",
         "location": "models",
     },
     "GFPGANv1.4.onnx": {
         "url": "https://huggingface.co/neurobytemind/GFPGANv1.4.onnx/resolve/main/GFPGANv1.4.onnx",
-        "size": 0,
+        "size": 340256686,
         "type": "enhancer",
         "required": False,
         "description": "Face enhancement model (ONNX)",
@@ -39,7 +33,7 @@ MODELS = {
     },
     "buffalo_l": {
         "url": "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip",
-        "size": 326587068,
+        "size": 288621354,
         "type": "analyser",
         "required": True,
         "description": "Face detection & analysis pack",
@@ -53,6 +47,14 @@ MODELS = {
         ],
     },
 }
+
+# A file this far from the expected size is treated as truncated or wrong (e.g. an error page)
+SIZE_TOLERANCE = 0.01
+RETRIES = 8
+
+
+class DownloadCancelled(Exception):
+    pass
 
 
 def get_model_path(model_name):
@@ -68,8 +70,12 @@ def get_model_path(model_name):
         return base / model_name
 
 
+def _size_ok(actual, expected):
+    return not expected or abs(actual - expected) / expected <= SIZE_TOLERANCE
+
+
 def check_model_status(model_name):
-    """Check if a model is downloaded. Returns (is_downloaded, path, current_size)."""
+    """Check if a model is downloaded and complete. Returns (is_downloaded, path, current_size)."""
     info = MODELS.get(model_name)
     if not info:
         return False, None, 0
@@ -85,7 +91,9 @@ def check_model_status(model_name):
         return False, path, 0
     else:
         if path.exists():
-            return True, path, path.stat().st_size
+            size = path.stat().st_size
+            # A truncated file (cancelled download) must not report as ready
+            return _size_ok(size, info.get("size")), path, size
         return False, path, 0
 
 
@@ -100,87 +108,92 @@ def format_size(size_bytes):
     return f"{size_bytes:.1f} TB"
 
 
-def download_file(url, filename, expected_size=None):
-    if not url:
-        print(f"Skipping {filename}: No download URL available.")
-        return
+def download_to(url, dest, expected_size=None, progress=None, is_cancelled=None):
+    """Download `url` to `dest` safely.
 
-    local_path = os.path.join("models", filename)
+    Writes to `<dest>.part`, resumes it after dropped connections (HTTP Range), and only renames
+    it to `dest` once the size matches. `progress(done, total)` is called as data arrives;
+    `is_cancelled()` aborts the download (the .part file is kept so it can resume later).
+    """
+    dest = Path(dest)
+    part = dest.with_name(dest.name + ".part")
+    dest.parent.mkdir(parents=True, exist_ok=True)
 
-    if os.path.exists(local_path):
-        # Check size if available
-        if expected_size:
-            local_size = os.path.getsize(local_path)
-            # Allow some tolerance for size mismatch (e.g. 1%)
-            if abs(local_size - expected_size) / expected_size < 0.05:
-                print(f"{filename} already exists and size matches. Skipping.")
-                return
-            else:
-                print(
-                    f"{filename} exists but size mismatch ({local_size} vs {expected_size}). Redownloading..."
-                )
-        else:
-            print(f"{filename} already exists. Skipping.")
-            return
+    total = expected_size or 0
+    for attempt in range(1, RETRIES + 1):
+        done = part.stat().st_size if part.exists() else 0
+        headers = {"Range": f"bytes={done}-"} if done else {}
+        try:
+            with requests.get(url, stream=True, headers=headers, timeout=30) as response:
+                if response.status_code == 416:  # already complete
+                    break
+                response.raise_for_status()
+                if done and response.status_code != 206:  # server ignored Range: start over
+                    done = 0
+                length = int(response.headers.get("content-length", 0))
+                total = done + length if length else total
+                with open(part, "ab" if done else "wb") as f:
+                    for chunk in response.iter_content(1 << 20):
+                        if is_cancelled and is_cancelled():
+                            raise DownloadCancelled()
+                        f.write(chunk)
+                        done += len(chunk)
+                        if progress:
+                            progress(done, total)
+            break
+        except DownloadCancelled:
+            raise
+        except (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError) as e:
+            if attempt == RETRIES:
+                raise
+            print(f"Connection problem ({e.__class__.__name__}), resuming in {2 * attempt}s...")
+            time.sleep(2 * attempt)
 
-    print(f"Downloading {filename}...")
-    try:
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
+    size = part.stat().st_size
+    if total and size != total:
+        raise IOError(f"Incomplete download of {dest.name}: {size} of {total} bytes")
+    if not _size_ok(size, expected_size):
+        part.unlink()
+        raise IOError(
+            f"{dest.name} is {format_size(size)} but should be about {format_size(expected_size)} "
+            "- the download link may require a login or have moved"
+        )
+    part.replace(dest)
+    return dest
 
-        total_size = int(response.headers.get("content-length", 0))
-        block_size = 1024  # 1 Kibibyte
 
-        with (
-            open(local_path, "wb") as f,
-            tqdm(
-                desc=filename,
-                total=total_size,
-                unit="iB",
-                unit_scale=True,
-                unit_divisor=1024,
-            ) as bar,
-        ):
-            for data in response.iter_content(block_size):
-                size = f.write(data)
-                bar.update(size)
-    except Exception as e:
-        print(f"Failed to download {filename}: {e}")
-        if os.path.exists(local_path):
-            os.remove(local_path)
+def fetch_model(model_name, progress=None, is_cancelled=None, status=None):
+    """Download one model from MODELS into place (zip packs are extracted). Returns its path."""
+    info = MODELS[model_name]
+    dest = get_model_path(model_name)
+
+    if info["location"] == "insightface":
+        zip_path = dest.parent / f"{model_name}.zip"
+        download_to(info["url"], zip_path, info.get("size"), progress, is_cancelled)
+        if status:
+            status("Extracting...")
+        dest.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(zip_path) as z:
+            # Flatten: the pack may or may not contain a top-level folder
+            for member in z.namelist():
+                if member.endswith(".onnx"):
+                    (dest / Path(member).name).write_bytes(z.read(member))
+        zip_path.unlink(missing_ok=True)
+        ok, _, _ = check_model_status(model_name)
+        if not ok:
+            raise IOError(f"{model_name} pack is missing expected files after extraction")
+    else:
+        download_to(info["url"], dest, info.get("size"), progress, is_cancelled)
+    return dest
 
 
 def get_required_models(args):
-    """Determine which models to download based on config and args."""
-
+    """Determine which models to download based on args."""
     if args.model:
         return [m for m in MODELS if m in args.model]
-
     if args.all:
         return list(MODELS.keys())
-
-    required = []
-    swapper_model = "inswapper_128.onnx"
-
-    if CONFIG_LOADED:
-        try:
-            configured_swapper = config.SWAPPER_MODEL.name
-            if configured_swapper in MODELS:
-                swapper_model = configured_swapper
-            elif "fp16" in configured_swapper and "inswapper_128.fp16.onnx" in MODELS:
-                swapper_model = "inswapper_128.fp16.onnx"
-            else:
-                print(
-                    f"Note: Configured swapper '{configured_swapper}' not in download list. Using default."
-                )
-
-        except Exception as e:
-            print(f"Error reading config: {e}")
-
-    if swapper_model not in required:
-        required.append(swapper_model)
-
-    return required
+    return [m for m, info in MODELS.items() if info["required"]]
 
 
 def main():
@@ -196,28 +209,38 @@ def main():
 
     if args.list:
         print("Available models:")
-        for m in MODELS:
-            print(f" - {m}")
+        for m, info in MODELS.items():
+            ok, _, _ = check_model_status(m)
+            print(f" - {m:22s} {'[ready]' if ok else '[missing]':10s} {info['description']}")
         return
 
-    if not os.path.exists("models"):
-        os.makedirs("models")
-        print("Created models/ directory.")
-
     models_to_download = get_required_models(args)
-
     print(f"Targets: {', '.join(models_to_download)}")
 
-    for filename in models_to_download:
-        if filename in MODELS:
-            data = MODELS[filename]
-            download_file(data["url"], filename, data.get("size"))
-        else:
-            print(f"Warning: Model {filename} not defined in script.")
+    failed = []
+    for name in models_to_download:
+        ok, path, _ = check_model_status(name)
+        if ok:
+            print(f"{name} already downloaded. Skipping.")
+            continue
+        print(f"Downloading {name}...")
+        bar = tqdm(desc=name, unit="iB", unit_scale=True, unit_divisor=1024)
 
-    print("\nDownload process completed.")
+        def progress(done, total, bar=bar):
+            bar.total = total or None
+            bar.n = done
+            bar.refresh()
+
+        try:
+            fetch_model(name, progress=progress)
+        except Exception as e:
+            failed.append(name)
+            print(f"\nFailed to download {name}: {e}")
+        finally:
+            bar.close()
+
+    print("\nDownload process completed." if not failed else f"\nFailed: {', '.join(failed)}")
 
 
 if __name__ == "__main__":
     main()
-

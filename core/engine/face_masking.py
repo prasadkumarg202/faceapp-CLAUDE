@@ -60,7 +60,7 @@ def create_face_mask(face: Face, frame: Frame) -> np.ndarray:
 
 def create_lower_mouth_mask(
     face: Face, frame: Frame
-) -> tuple[np.ndarray, np.ndarray, tuple, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray | None, tuple, np.ndarray | None]:
     mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     mouth_cutout = None
     lower_lip_polygon = None
@@ -94,11 +94,8 @@ def create_lower_mouth_mask(
         max_x = min(frame.shape[1], max_x + padding)
         max_y = min(frame.shape[0], max_y + padding)
 
-        if max_x <= min_x or max_y <= min_y:
-            if (max_x - min_x) <= 1:
-                max_x = min_x + 1
-            if (max_y - min_y) <= 1:
-                max_y = min_y + 1
+        if max_x - min_x < 2 or max_y - min_y < 2:  # mouth outside the frame
+            return mask, None, (0, 0, 0, 0), None
 
         mask_roi = np.zeros((max_y - min_y, max_x - min_x), dtype=np.uint8)
         polygon_relative_to_roi = expanded_landmarks - [min_x, min_y]
@@ -112,7 +109,7 @@ def create_lower_mouth_mask(
 
     return mask, mouth_cutout, mouth_box, lower_lip_polygon
 
-def create_eyes_mask(face: Face, frame: Frame) -> tuple[np.ndarray, np.ndarray, tuple, np.ndarray]:
+def create_eyes_mask(face: Face, frame: Frame) -> tuple[np.ndarray, np.ndarray | None, tuple, np.ndarray | None]:
     mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     eyes_cutout = None
     eyes_polygon = None
@@ -145,7 +142,9 @@ def create_eyes_mask(face: Face, frame: Frame) -> tuple[np.ndarray, np.ndarray, 
         min_y = max(0, min_y)
         max_x = min(frame.shape[1], max_x)
         max_y = min(frame.shape[0], max_y)
-        
+        if max_x - min_x < 2 or max_y - min_y < 2:  # eyes outside the frame
+            return mask, None, (0, 0, 0, 0), None
+
         mask_roi = np.zeros((max_y - min_y, max_x - min_x), dtype=np.uint8)
         
         left_center = (left_eye_center[0] - min_x, left_eye_center[1] - min_y)
@@ -211,7 +210,7 @@ def create_curved_eyebrow(points):
         return padded_points
     return points
 
-def create_eyebrows_mask(face: Face, frame: Frame) -> tuple[np.ndarray, np.ndarray, tuple, np.ndarray]:
+def create_eyebrows_mask(face: Face, frame: Frame) -> tuple[np.ndarray, np.ndarray | None, tuple, np.ndarray | None]:
     mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     eyebrows_cutout = None
     eyebrows_polygon = None
@@ -231,7 +230,9 @@ def create_eyebrows_mask(face: Face, frame: Frame) -> tuple[np.ndarray, np.ndarr
         min_y = max(0, int(min_y))
         max_x = min(frame.shape[1], int(max_x))
         max_y = min(frame.shape[0], int(max_y))
-        
+        if max_x - min_x < 2 or max_y - min_y < 2:  # eyebrows outside the frame
+            return mask, None, (0, 0, 0, 0), None
+
         mask_roi = np.zeros((max_y - min_y, max_x - min_x), dtype=np.uint8)
         
         try:

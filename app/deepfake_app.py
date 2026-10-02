@@ -8,7 +8,6 @@ import os
 import cv2
 import numpy as np
 import json
-import zipfile
 from pathlib import Path
 
 # Try to import pyvirtualcam (optional dependency)
@@ -47,7 +46,7 @@ from PyQt6.QtGui import QImage, QPixmap, QFont, QDesktopServices, QIcon
 
 from app.video_thread import VideoThread
 from core.face_analyser import get_face_analyser
-from download_models import MODELS, check_model_status, get_model_path, format_size
+from download_models import MODELS, DownloadCancelled, check_model_status, fetch_model, format_size
 
 
 class ModelDownloadThread(QThread):
@@ -66,46 +65,21 @@ class ModelDownloadThread(QThread):
 
     def run(self):
         try:
-            import requests
-
-            url = self.model_info["url"]
-            dest_path = get_model_path(self.model_name)
-
-            if self.model_info["location"] == "insightface":
-                # Download zip and extract
-                dest_path.mkdir(parents=True, exist_ok=True)
-                zip_path = dest_path.parent / f"{self.model_name}.zip"
-                self._download_file(requests, url, zip_path)
-                if self._cancelled:
-                    return
-                self.status_update.emit("Extracting...")
-                with zipfile.ZipFile(zip_path, 'r') as z:
-                    z.extractall(dest_path)
-                zip_path.unlink(missing_ok=True)
-            else:
-                dest_path.parent.mkdir(parents=True, exist_ok=True)
-                self._download_file(requests, url, dest_path)
-
-            if not self._cancelled:
-                self.download_complete.emit(self.model_name)
+            fetch_model(
+                self.model_name,
+                progress=self._on_progress,
+                is_cancelled=lambda: self._cancelled,
+                status=self.status_update.emit,
+            )
+            self.download_complete.emit(self.model_name)
+        except DownloadCancelled:
+            pass  # the .part file is kept so the next attempt resumes
         except Exception as e:
             self.download_error.emit(self.model_name, str(e))
 
-    def _download_file(self, requests, url, dest_path):
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        total_size = int(response.headers.get("content-length", 0))
-        downloaded = 0
-        block_size = 8192
-
-        with open(dest_path, "wb") as f:
-            for chunk in response.iter_content(block_size):
-                if self._cancelled:
-                    return
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total_size > 0:
-                    self.progress_update.emit(int(downloaded * 100 / total_size))
+    def _on_progress(self, done, total):
+        if total > 0:
+            self.progress_update.emit(int(done * 100 / total))
 
     def cancel(self):
         self._cancelled = True
@@ -307,7 +281,9 @@ class DeepfakeApp(QMainWindow):
         self.status_label = QLabel("Ready")
         self.fps_label = QLabel("FPS: 0")
         self.face_count_label = QLabel("Faces: 0")
+        self.device_label = QLabel("")
         self.status_bar.addWidget(self.status_label, stretch=1)
+        self.status_bar.addPermanentWidget(self.device_label)
         self.status_bar.addPermanentWidget(self.face_count_label)
         self.status_bar.addPermanentWidget(self.fps_label)
         
@@ -920,6 +896,21 @@ class DeepfakeApp(QMainWindow):
         self.poisson_blend_checkbox.setStyleSheet("QCheckBox { color: #ffffff; }")
         advanced_layout.addWidget(self.poisson_blend_checkbox)
 
+        # GFPGAN enhancement checkbox
+        self.enhance_checkbox = QCheckBox("Enhance Face (GFPGAN, slower)")
+        self.enhance_checkbox.setEnabled(False)
+        self.enhance_checkbox.setToolTip("Restores face detail after the swap. Roughly halves FPS.")
+        def _toggle_enhance(state):
+            from core import config
+            from core.engine.face_enhancer import is_enhancer_ready, warm_up_async
+            config.ENHANCE_ENABLED = (state == Qt.CheckState.Checked.value)
+            if config.ENHANCE_ENABLED and not is_enhancer_ready():
+                warm_up_async()
+                self.status_label.setText("Preparing face enhancer (first time can take a minute)...")
+        self.enhance_checkbox.stateChanged.connect(_toggle_enhance)
+        self.enhance_checkbox.setStyleSheet("QCheckBox { color: #ffffff; }")
+        advanced_layout.addWidget(self.enhance_checkbox)
+
         self.advanced_group.setLayout(advanced_layout)
         camera_layout.addWidget(self.advanced_group)
 
@@ -1105,6 +1096,7 @@ class DeepfakeApp(QMainWindow):
                     self.swap_btn.setEnabled(True)
 
                 self.status_label.setText("Source image loaded successfully")
+                self.update_device_label()
                 QApplication.restoreOverrideCursor()
 
             except Exception as e:
@@ -1184,6 +1176,7 @@ class DeepfakeApp(QMainWindow):
             self.video_thread.fps_update.connect(self.update_fps)
             self.video_thread.face_count_update.connect(self.update_face_count)
             self.video_thread.error_occurred.connect(self.handle_error)
+            self.video_thread.virtual_cam_error.connect(self.handle_virtual_cam_error)
 
             # Set source face if available
             if self.source_face is not None:
@@ -1232,11 +1225,13 @@ class DeepfakeApp(QMainWindow):
         self.eyes_mask_checkbox.setEnabled(False)
         self.eyebrows_mask_checkbox.setEnabled(False)
         self.poisson_blend_checkbox.setEnabled(False)
+        self.enhance_checkbox.setEnabled(False)
         self.opacity_slider.setEnabled(False)
         self.mouth_mask_checkbox.setChecked(False)
         self.eyes_mask_checkbox.setChecked(False)
         self.eyebrows_mask_checkbox.setChecked(False)
         self.poisson_blend_checkbox.setChecked(False)
+        self.enhance_checkbox.setChecked(False)
         
         # Stop and disable virtual camera
         if VIRTUAL_CAM_AVAILABLE:
@@ -1274,6 +1269,7 @@ class DeepfakeApp(QMainWindow):
                 self.eyes_mask_checkbox.setEnabled(True)
                 self.eyebrows_mask_checkbox.setEnabled(True)
                 self.poisson_blend_checkbox.setEnabled(True)
+                self.enhance_checkbox.setEnabled(True)
                 self.opacity_slider.setEnabled(True)
             else:
                 self.swap_btn.setText("Enable Face Swap")
@@ -1283,11 +1279,13 @@ class DeepfakeApp(QMainWindow):
                 self.eyes_mask_checkbox.setEnabled(False)
                 self.eyebrows_mask_checkbox.setEnabled(False)
                 self.poisson_blend_checkbox.setEnabled(False)
+                self.enhance_checkbox.setEnabled(False)
                 self.opacity_slider.setEnabled(False)
                 self.mouth_mask_checkbox.setChecked(False)
                 self.eyes_mask_checkbox.setChecked(False)
                 self.eyebrows_mask_checkbox.setChecked(False)
                 self.poisson_blend_checkbox.setChecked(False)
+                self.enhance_checkbox.setChecked(False)
 
     def toggle_mouth_mask(self, state):
         """Toggle mouth masking on/off"""
@@ -1330,6 +1328,7 @@ class DeepfakeApp(QMainWindow):
                 # Create virtual camera with actual camera resolution
                 self.virtual_cam = pyvirtualcam.Camera(width=width, height=height, fps=30, fmt=pyvirtualcam.PixelFormat.BGR)
                 self.virtual_cam_enabled = True
+                self.video_thread.set_virtual_camera(self.virtual_cam)
                 self.status_label.setText(f"Virtual camera started: {self.virtual_cam.device} ({width}x{height})")
             except Exception as e:
                 self.virtual_cam_enabled = False
@@ -1340,6 +1339,8 @@ class DeepfakeApp(QMainWindow):
                     f"Failed to start virtual camera:\n{str(e)}\n\nOn Linux, install v4l2loopback:\nsudo modprobe v4l2loopback"
                 )
         else:
+            if self.video_thread is not None:
+                self.video_thread.set_virtual_camera(None)
             if self.virtual_cam is not None:
                 self.virtual_cam.close()
                 self.virtual_cam = None
@@ -1367,21 +1368,33 @@ class DeepfakeApp(QMainWindow):
         )
 
         self.video_label.setPixmap(scaled_pixmap)
-        
-        # Send to virtual camera if enabled
-        if self.virtual_cam_enabled and self.virtual_cam is not None:
-            try:
-                # Send frame at original resolution (matches virtual camera size)
-                self.virtual_cam.send(frame)
-            except Exception as e:
-                print(f"Virtual camera error: {e}")
-                self.virtual_cam_enabled = False
-                if VIRTUAL_CAM_AVAILABLE:
-                    self.virtual_cam_checkbox.setChecked(False)
+
+        # Virtual camera frames are sent from the video thread; tell it this frame was drawn
+        if self.video_thread is not None:
+            self.video_thread.frame_displayed()
+
+    def handle_virtual_cam_error(self, error_msg):
+        """Virtual camera failed in the video thread: turn the checkbox off"""
+        print(f"Virtual camera error: {error_msg}")
+        if VIRTUAL_CAM_AVAILABLE:
+            self.virtual_cam_checkbox.setChecked(False)
 
     def update_fps(self, fps):
         """Update FPS display"""
         self.fps_label.setText(f"FPS: {fps:.1f}")
+        self.update_device_label()
+
+    def update_device_label(self):
+        """Show whether inference is running on GPU or has fallen back to CPU"""
+        from core.runtime import gpu_status
+        status, details = gpu_status()
+        if status is None:
+            return
+        colors = {"GPU": "#4CAF50", "Mixed": "#FF9800", "CPU": "#f44336"}
+        text = {"GPU": "GPU", "Mixed": "GPU+CPU", "CPU": "CPU ONLY"}[status]
+        self.device_label.setText(text)
+        self.device_label.setStyleSheet(f"color: {colors[status]}; font-weight: bold; padding: 0 8px;")
+        self.device_label.setToolTip(details)
 
     def update_face_count(self, count):
         """Update face count display"""

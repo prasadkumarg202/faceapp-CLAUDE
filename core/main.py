@@ -5,6 +5,7 @@ Contains all CLI and GUI logic
 
 import sys
 import argparse
+import logging
 from pathlib import Path
 
 from core.image_processor import process_image
@@ -73,8 +74,7 @@ def launch_gui():
 def run_cli(args):
     """Run CLI mode based on arguments"""
     import cv2
-    from core.face_analyser import get_face_analyser
-    from core.engine.face_swapper import swap_face
+    from core.face_analyser import get_face_analyser, get_live_face_analyser
 
     # Validate source image
     if not args.source:
@@ -102,7 +102,10 @@ def run_cli(args):
         sys.exit(1)
 
     source_face = source_faces[0]
-    print(f"✓ Source face detected")
+    print("✓ Source face detected")
+
+    # Target frames only need detection + landmarks
+    face_analyser = get_live_face_analyser()
 
     # Route to appropriate mode
     if args.webcam:
@@ -191,6 +194,7 @@ def run_file_mode(source_face, face_analyser, args):
 
 def main():
     """Main entry point - routes to GUI or CLI based on arguments"""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     args = parse_arguments()
 

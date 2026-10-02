@@ -1,4 +1,4 @@
-import os
+import logging
 import cv2
 import numpy as np
 import insightface
@@ -6,6 +6,9 @@ import threading
 from typing import Any, List
 from core.config import SWAPPER_MODEL
 import core.config as config
+from core.runtime import get_providers, register_session
+from core.engine.model_optimizer import ensure_mixed_precision_model
+from core.engine.paste_back import paste_back
 from core.engine.gpu_processing import gpu_add_weighted, gpu_resize, gpu_sharpen
 from core.engine.face_masking import (
     create_face_mask, 
@@ -15,6 +18,8 @@ from core.engine.face_masking import (
     create_eyebrows_mask
 )
 
+logger = logging.getLogger(__name__)
+
 swapper_ = None
 THREAD_LOCK = threading.Lock()
 PREVIOUS_FRAME_RESULT = None
@@ -23,8 +28,13 @@ def get_face_swapper():
     global swapper_
     with THREAD_LOCK:
         if swapper_ is None:
-            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
-            swapper_ = insightface.model_zoo.get_model(str(SWAPPER_MODEL), providers=providers)
+            model_path = SWAPPER_MODEL
+            providers = get_providers()
+            if getattr(config, "SWAPPER_PRECISION", "fp32") == "mixed" and "CUDAExecutionProvider" in providers:
+                model_path = ensure_mixed_precision_model(SWAPPER_MODEL) or SWAPPER_MODEL
+            swapper_ = insightface.model_zoo.get_model(str(model_path), providers=providers)
+            logger.info("Swapper model: %s", model_path.name)
+            register_session("swapper", swapper_.session)
     return swapper_
 
 def swap_face(source_face, target_face, frame):
@@ -47,7 +57,8 @@ def swap_face(source_face, target_face, frame):
         temp_frame = np.ascontiguousarray(temp_frame)
         
     try:
-        swapped_frame_raw = face_swapper.get(temp_frame, target_face, source_face, paste_back=True)
+        bgr_fake, M = face_swapper.get(temp_frame, target_face, source_face, paste_back=False)
+        swapped_frame_raw = paste_back(temp_frame, bgr_fake, M)
         if swapped_frame_raw is None or not isinstance(swapped_frame_raw, np.ndarray):
             return original_frame
         if swapped_frame_raw.shape != temp_frame.shape:
@@ -167,6 +178,13 @@ def detect_and_swap(source_face, frame, face_analyser):
             if face is not None and hasattr(face, "bbox") and face.bbox is not None:
                 swapped_face_bboxes.append(face.bbox.astype(int))
         processed_frame = current_swap_target
-        
+
+        if getattr(config, "ENHANCE_ENABLED", False):
+            from core.engine.face_enhancer import enhance_faces, is_enhancer_ready, warm_up_async
+            if is_enhancer_ready():
+                processed_frame = enhance_faces(processed_frame, faces, None)
+            else:
+                warm_up_async()  # keep streaming unenhanced until it has loaded
+
     final_frame = apply_post_processing(processed_frame, swapped_face_bboxes)
     return final_frame, face_count

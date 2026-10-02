@@ -13,8 +13,15 @@ SWAPPER_MODEL = (
     MODELS_DIR / "inswapper_128.onnx"
 )  # higher model inswapper_128_fp16.onnx
 
+# "mixed": convolutions in FP16 (tensor cores), everything else FP32. ~2.3x faster swap on
+# RTX 4000 with output within 2/255 of FP32. "fp32": original model.
+SWAPPER_PRECISION: Literal["mixed", "fp32"] = "mixed"
+
 ENHANCER_MODEL = MODELS_DIR / "GFPGANv1.4.onnx"
 ENHANCE_WEIGHT = 0.6  # blend strength: 0 = full GFPGAN, 1 = original face
+# GFPGAN after the swap. Off by default: ~60 ms per face on an RTX 4000.
+ENHANCE_ENABLED = False
+ENHANCER_PRECISION: Literal["mixed", "fp32"] = "mixed"  # mixed: 1.3x faster, output within PSNR 60 dB
 
 INSIGHTFACE_DIR = Path.home() / ".insightface" / "models"
 BUFFALO_L_DIR = INSIGHTFACE_DIR / "buffalo_l"
