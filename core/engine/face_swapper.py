@@ -3,16 +3,15 @@ import cv2
 import numpy as np
 import insightface
 import threading
-from typing import Any, List
 from core.config import SWAPPER_MODEL
 import core.config as config
-from core.runtime import get_providers, register_session
+from core.runtime import get_providers, register_session, log_throttled
 from core.engine.model_optimizer import ensure_mixed_precision_model
 from core.engine.paste_back import paste_back
 from core.engine.gpu_processing import gpu_add_weighted, gpu_resize, gpu_sharpen
 from core.engine.face_masking import (
-    create_face_mask, 
-    create_lower_mouth_mask, 
+    create_face_mask,
+    create_lower_mouth_mask,
     apply_mask_area,
     create_eyes_mask,
     create_eyebrows_mask
@@ -41,21 +40,21 @@ def swap_face(source_face, target_face, frame):
     face_swapper = get_face_swapper()
     if face_swapper is None or source_face is None or target_face is None:
         return frame
-        
+
     opacity = getattr(config, "OPACITY", 1.0)
     mouth_mask_enabled = getattr(config, "MOUTH_MASK_ENABLED", False)
     eyes_mask_enabled = getattr(config, "EYES_MASK_ENABLED", False)
     eyebrows_mask_enabled = getattr(config, "EYEBROWS_MASK_ENABLED", False)
-    
+
     original_frame = frame.copy() if (opacity < 1.0 or mouth_mask_enabled or eyes_mask_enabled or eyebrows_mask_enabled) else frame
-    
+
     temp_frame = frame
     if temp_frame.dtype != np.uint8:
         temp_frame = np.clip(temp_frame, 0, 255).astype(np.uint8)
-        
+
     if not temp_frame.flags['C_CONTIGUOUS']:
         temp_frame = np.ascontiguousarray(temp_frame)
-        
+
     try:
         bgr_fake, M = face_swapper.get(temp_frame, target_face, source_face, paste_back=False)
         swapped_frame_raw = paste_back(temp_frame, bgr_fake, M)
@@ -65,19 +64,19 @@ def swap_face(source_face, target_face, frame):
             swapped_frame_raw = gpu_resize(swapped_frame_raw, (temp_frame.shape[1], temp_frame.shape[0]))
         swapped_frame = np.clip(swapped_frame_raw, 0, 255).astype(np.uint8)
     except Exception as e:
-        print(f"Error during swap: {e}")
+        log_throttled(logger, "swap", "Error during swap: %s", e)
         return original_frame
 
     # Masking
     face_mask = None
     if mouth_mask_enabled or eyes_mask_enabled or eyebrows_mask_enabled or getattr(config, "POISSON_BLEND_ENABLED", False):
         face_mask = create_face_mask(target_face, original_frame)
-        
+
     if mouth_mask_enabled:
         mouth_mask, mouth_cutout, mouth_box, lower_lip_polygon = create_lower_mouth_mask(target_face, original_frame)
         if mouth_cutout is not None and mouth_box != (0,0,0,0):
             swapped_frame = apply_mask_area(swapped_frame, mouth_cutout, mouth_box, face_mask, lower_lip_polygon)
-            
+
     if eyes_mask_enabled:
         mask, cutout, box, polygon = create_eyes_mask(target_face, original_frame)
         if cutout is not None and box != (0,0,0,0):
@@ -101,7 +100,7 @@ def swap_face(source_face, target_face, frame):
                 try:
                     swapped_frame = cv2.seamlessClone(src_crop, original_frame, mask_crop, center, cv2.NORMAL_CLONE)
                 except Exception as e:
-                    print(f"Poisson blending failed: {e}")
+                    log_throttled(logger, "poisson", "Poisson blending failed: %s", e)
 
     if opacity >= 1.0:
         return swapped_frame.astype(np.uint8)
@@ -130,7 +129,8 @@ def apply_post_processing(current_frame, swapped_face_bboxes):
                 continue
 
             face_region = processed_frame[y1:y2, x1:x2]
-            if face_region.size == 0: continue
+            if face_region.size == 0:
+                continue
 
             try:
                 sharpened_region = gpu_sharpen(face_region, strength=sharpness_value, sigma=3)
@@ -141,7 +141,7 @@ def apply_post_processing(current_frame, swapped_face_bboxes):
 
     enable_interpolation = getattr(config, "ENABLE_INTERPOLATION", False)
     interpolation_weight = getattr(config, "INTERPOLATION_WEIGHT", 0.2)
-    final_frame = processed_frame 
+    final_frame = processed_frame
 
     if enable_interpolation and 0 < interpolation_weight < 1:
         if PREVIOUS_FRAME_RESULT is not None and PREVIOUS_FRAME_RESULT.shape == processed_frame.shape and PREVIOUS_FRAME_RESULT.dtype == processed_frame.dtype:
@@ -167,10 +167,10 @@ def detect_and_swap(source_face, frame, face_analyser):
 
     faces = face_analyser.get(frame)
     face_count = len(faces)
-    
+
     processed_frame = frame
     swapped_face_bboxes = []
-    
+
     if face_count > 0:
         current_swap_target = processed_frame.copy()
         for face in faces:

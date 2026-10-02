@@ -4,9 +4,8 @@ A professional PyQt6 application for live deepfake face swapping
 """
 
 import sys
-import os
+import logging
 import cv2
-import numpy as np
 import json
 from pathlib import Path
 
@@ -16,7 +15,7 @@ try:
     VIRTUAL_CAM_AVAILABLE = True
 except ImportError:
     VIRTUAL_CAM_AVAILABLE = False
-    print("pyvirtualcam not available - virtual camera feature disabled")
+    logging.getLogger(__name__).info("pyvirtualcam not available - virtual camera feature disabled")
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -31,8 +30,6 @@ from PyQt6.QtWidgets import (
     QStatusBar,
     QFrame,
     QCheckBox,
-    QRadioButton,
-    QButtonGroup,
     QTabWidget,
     QProgressBar,
     QDialog,
@@ -41,12 +38,14 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSlider,
 )
-from PyQt6.QtCore import Qt, QTimer, QUrl, QThread, pyqtSignal, PYQT_VERSION_STR, qVersion
+from PyQt6.QtCore import Qt, QUrl, QThread, pyqtSignal, PYQT_VERSION_STR, qVersion
 from PyQt6.QtGui import QImage, QPixmap, QFont, QDesktopServices, QIcon
 
 from app.video_thread import VideoThread
 from core.face_analyser import get_face_analyser
 from download_models import MODELS, DownloadCancelled, check_model_status, fetch_model, format_size
+
+logger = logging.getLogger(__name__)
 
 
 class ModelDownloadThread(QThread):
@@ -87,13 +86,13 @@ class ModelDownloadThread(QThread):
 
 class CameraDetectionThread(QThread):
     """Background thread for detecting available cameras"""
-    
+
     cameras_detected = pyqtSignal(list)  # Emits list of camera indices
-    
+
     def __init__(self, max_cameras=6):
         super().__init__()
         self.max_cameras = max_cameras
-    
+
     def run(self):
         """Detect available cameras in background"""
         available = []
@@ -108,62 +107,62 @@ class CameraDetectionThread(QThread):
                 if ret:
                     available.append(i)
                 cap.release()
-        
+
         self.cameras_detected.emit(available)
 
 
 class SettingsDialog(QDialog):
     """Settings dialog for configuring app preferences"""
-    
+
     def __init__(self, current_working_dir, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Settings")
         self.setModal(True)
         self.setMinimumWidth(500)
-        
+
         self.working_dir = current_working_dir
-        
+
         layout = QVBoxLayout()
-        
+
         # Working Directory Section
         dir_group = QGroupBox("Working Directory")
         dir_layout = QVBoxLayout()
-        
+
         info_label = QLabel("All file browsers will start from this directory:")
         info_label.setStyleSheet("color: #aaa; font-size: 11px;")
         dir_layout.addWidget(info_label)
-        
+
         # Directory display and browse
         dir_row = QHBoxLayout()
         self.dir_input = QLineEdit(self.working_dir)
         self.dir_input.setReadOnly(True)
         dir_row.addWidget(self.dir_input)
-        
+
         browse_btn = QPushButton("Browse...")
         browse_btn.clicked.connect(self.browse_directory)
         dir_row.addWidget(browse_btn)
-        
+
         dir_layout.addLayout(dir_row)
         dir_group.setLayout(dir_layout)
         layout.addWidget(dir_group)
-        
+
         # Buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
-        
+
         save_btn = QPushButton("Save")
         save_btn.clicked.connect(self.accept)
         save_btn.setStyleSheet("background-color: #4CAF50; min-width: 80px;")
         button_layout.addWidget(save_btn)
-        
+
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         cancel_btn.setStyleSheet("background-color: #555; min-width: 80px;")
         button_layout.addWidget(cancel_btn)
-        
+
         layout.addLayout(button_layout)
         self.setLayout(layout)
-        
+
         # Apply dark theme
         self.setStyleSheet("""
             QDialog {
@@ -192,7 +191,7 @@ class SettingsDialog(QDialog):
                 padding: 5px;
             }
         """)
-    
+
     def browse_directory(self):
         """Open directory browser"""
         directory = QFileDialog.getExistingDirectory(
@@ -203,7 +202,7 @@ class SettingsDialog(QDialog):
         if directory:
             self.working_dir = directory
             self.dir_input.setText(directory)
-    
+
     def get_working_dir(self):
         """Return the selected working directory"""
         return self.working_dir
@@ -227,15 +226,16 @@ class DeepfakeApp(QMainWindow):
         self.source_face = None
         self.video_thread = None
         self.is_capturing = False
-        self.selected_camera_index = 0  # Default camera
+        from core.config import DEFAULT_CAMERA_INDEX
+        self.selected_camera_index = DEFAULT_CAMERA_INDEX
         self.available_cameras = []
         self.virtual_cam = None  # Virtual camera instance
         self.virtual_cam_enabled = False  # Virtual camera state
-        
+
         # Model download state
         self._active_downloads = {}  # model_name -> ModelDownloadThread
         self._model_cards = {}  # model_name -> dict of widgets
-        
+
         # Settings
         self.settings_file = Path.home() / ".deepfacenet_settings.json"
         self.working_dir = self.load_settings()
@@ -286,7 +286,7 @@ class DeepfakeApp(QMainWindow):
         self.status_bar.addPermanentWidget(self.device_label)
         self.status_bar.addPermanentWidget(self.face_count_label)
         self.status_bar.addPermanentWidget(self.fps_label)
-        
+
         # Add Settings button to status bar
         settings_btn = QPushButton("⚙ Settings")
         settings_btn.clicked.connect(self.open_settings)
@@ -299,7 +299,7 @@ class DeepfakeApp(QMainWindow):
             QPushButton:hover { background-color: #666; }
         """)
         self.status_bar.addPermanentWidget(settings_btn)
-        
+
         # Detect and populate available cameras
         self.detect_and_populate_cameras()
 
@@ -654,7 +654,7 @@ class DeepfakeApp(QMainWindow):
         # Minimal clear button in top-right
         header = QHBoxLayout()
         header.addStretch()
-        
+
         # Clear button
         self.clear_feed_btn = QPushButton("✕")
         self.clear_feed_btn.setFixedSize(20, 20)
@@ -779,7 +779,7 @@ class DeepfakeApp(QMainWindow):
         camera_select_label = QLabel("Select Camera:")
         camera_select_label.setStyleSheet("color: #ffffff; font-weight: bold; margin-top: 5px;")
         camera_layout.addWidget(camera_select_label)
-        
+
         camera_select_row = QHBoxLayout()
         self.camera_combo = QComboBox()
         self.camera_combo.setMinimumHeight(30)
@@ -805,7 +805,7 @@ class DeepfakeApp(QMainWindow):
             }
         """)
         camera_select_row.addWidget(self.camera_combo)
-        
+
         self.refresh_cameras_btn = QPushButton("🔄")
         self.refresh_cameras_btn.setFixedSize(30, 30)
         self.refresh_cameras_btn.setToolTip("Refresh camera list")
@@ -999,7 +999,7 @@ class DeepfakeApp(QMainWindow):
         self.status_label.setText("Detecting cameras...")
         self.camera_combo.setEnabled(False)
         self.refresh_cameras_btn.setEnabled(False)
-        
+
         # Start background detection thread
         self.camera_detection_thread = CameraDetectionThread(max_cameras=6)
         self.camera_detection_thread.cameras_detected.connect(self.on_cameras_detected)
@@ -1008,7 +1008,7 @@ class DeepfakeApp(QMainWindow):
     def on_cameras_detected(self, available_cameras):
         """Handle camera detection results from background thread"""
         self.available_cameras = available_cameras
-        
+
         self.camera_combo.clear()
         if self.available_cameras:
             for cam_idx in self.available_cameras:
@@ -1022,7 +1022,7 @@ class DeepfakeApp(QMainWindow):
             self.camera_combo.addItem("No cameras found", -1)
             self.selected_camera_index = -1
             self.status_label.setText("No cameras detected")
-        
+
         self.camera_combo.setEnabled(True)
         self.refresh_cameras_btn.setEnabled(True)
 
@@ -1059,7 +1059,7 @@ class DeepfakeApp(QMainWindow):
                 self.status_label.setText("Loading source image...")
                 QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
                 QApplication.processEvents()  # Keep UI responsive
-                
+
                 # Load image
                 self.source_image = cv2.imread(file_path)
                 if self.source_image is None:
@@ -1086,7 +1086,7 @@ class DeepfakeApp(QMainWindow):
 
                 # Display preview
                 self.display_source_preview(self.source_image, self.source_preview)
-                self.source_status.setText(f"✓ Face detected")
+                self.source_status.setText("✓ Face detected")
                 self.source_status.setStyleSheet("color: #4CAF50;")
                 self.btn_clear_live_source.setEnabled(True)
 
@@ -1115,7 +1115,7 @@ class DeepfakeApp(QMainWindow):
         self.source_status.setText("No source loaded")
         self.source_status.setStyleSheet("color: #888;")
         self.btn_clear_live_source.setEnabled(False)
-        
+
         # Update video thread if running
         if self.video_thread is not None:
             self.video_thread.set_source_face(None)
@@ -1123,7 +1123,7 @@ class DeepfakeApp(QMainWindow):
             # If swap was enabled, disable it
             if self.video_thread.swap_enabled:
                 self.toggle_swap()
-        
+
         self.status_label.setText("Source image cleared")
 
     def display_source_preview(self, image, label_widget):
@@ -1169,7 +1169,7 @@ class DeepfakeApp(QMainWindow):
                     "No camera selected. Please select a valid camera from the dropdown."
                 )
                 return
-            
+
             # Create and start video thread with selected camera
             self.video_thread = VideoThread(camera_index=self.selected_camera_index)
             self.video_thread.frame_ready.connect(self.update_frame)
@@ -1190,17 +1190,17 @@ class DeepfakeApp(QMainWindow):
             self.start_btn.setStyleSheet("background-color: #f44336;")
             self.camera_combo.setEnabled(False)  # Disable camera selection while running
             self.refresh_cameras_btn.setEnabled(False)
-            
+
             # Enable virtual camera checkbox if available
             if VIRTUAL_CAM_AVAILABLE:
                 self.virtual_cam_checkbox.setEnabled(True)
-            
+
             # Show a subtle banner if the analyser model is missing
             from core.config import ANALYSIS_MODEL
             from download_models import check_model_status
             is_downloaded, _, _ = check_model_status(ANALYSIS_MODEL)
             self.missing_model_banner.setVisible(not is_downloaded)
-            
+
             self.status_label.setText(f"Camera {self.selected_camera_index} started")
 
         except Exception as e:
@@ -1232,16 +1232,16 @@ class DeepfakeApp(QMainWindow):
         self.eyebrows_mask_checkbox.setChecked(False)
         self.poisson_blend_checkbox.setChecked(False)
         self.enhance_checkbox.setChecked(False)
-        
+
         # Stop and disable virtual camera
         if VIRTUAL_CAM_AVAILABLE:
             if self.virtual_cam_enabled:
                 self.virtual_cam_checkbox.setChecked(False)
             self.virtual_cam_checkbox.setEnabled(False)
-        
+
         # Automatically clear the video feed
         self.clear_video_feed()
-        
+
         self.status_label.setText("Camera stopped")
         self.fps_label.setText("FPS: 0")
         self.face_count_label.setText("Faces: 0")
@@ -1287,24 +1287,13 @@ class DeepfakeApp(QMainWindow):
                 self.poisson_blend_checkbox.setChecked(False)
                 self.enhance_checkbox.setChecked(False)
 
-    def toggle_mouth_mask(self, state):
-        """Toggle mouth masking on/off"""
-        if self.video_thread is not None:
-            enabled = state == Qt.CheckState.Checked.value
-            self.video_thread.enable_mouth_mask(enabled)
-            
-            if enabled:
-                self.status_label.setText("Mouth masking enabled")
-            else:
-                self.status_label.setText("Mouth masking disabled")
-
     def toggle_virtual_camera(self, state):
         """Toggle virtual camera output"""
         if not VIRTUAL_CAM_AVAILABLE:
             return
-            
+
         enabled = state == Qt.CheckState.Checked.value
-        
+
         if enabled:
             # Check if camera is running
             if not self.is_capturing or self.video_thread is None:
@@ -1315,7 +1304,7 @@ class DeepfakeApp(QMainWindow):
                     "Please start the camera before enabling virtual camera."
                 )
                 return
-            
+
             try:
                 # Get actual camera resolution from video thread
                 if hasattr(self.video_thread, 'cap') and self.video_thread.cap is not None:
@@ -1324,7 +1313,7 @@ class DeepfakeApp(QMainWindow):
                 else:
                     # Fallback to common resolution
                     width, height = 640, 480
-                
+
                 # Create virtual camera with actual camera resolution
                 self.virtual_cam = pyvirtualcam.Camera(width=width, height=height, fps=30, fmt=pyvirtualcam.PixelFormat.BGR)
                 self.virtual_cam_enabled = True
@@ -1375,7 +1364,7 @@ class DeepfakeApp(QMainWindow):
 
     def handle_virtual_cam_error(self, error_msg):
         """Virtual camera failed in the video thread: turn the checkbox off"""
-        print(f"Virtual camera error: {error_msg}")
+        logger.warning("Virtual camera error: %s", error_msg)
         if VIRTUAL_CAM_AVAILABLE:
             self.virtual_cam_checkbox.setChecked(False)
 
@@ -1489,9 +1478,9 @@ class DeepfakeApp(QMainWindow):
                     settings = json.load(f)
                     return settings.get('working_dir', str(Path.home()))
         except Exception as e:
-            print(f"Error loading settings: {e}")
+            logger.warning("Error loading settings: %s", e)
         return str(Path.home())
-    
+
     def save_settings(self):
         """Save settings to JSON file"""
         try:
@@ -1501,8 +1490,8 @@ class DeepfakeApp(QMainWindow):
             with open(self.settings_file, 'w') as f:
                 json.dump(settings, f, indent=2)
         except Exception as e:
-            print(f"Error saving settings: {e}")
-    
+            logger.warning("Error saving settings: %s", e)
+
     def open_settings(self):
         """Open settings dialog"""
         dialog = SettingsDialog(self.working_dir, self)

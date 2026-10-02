@@ -20,13 +20,13 @@ def parse_arguments():
 Examples:
   # Launch GUI application (default)
   python run.py
-  
+
   # Process image file
   python run.py --source face.jpg --target photo.jpg --output result.jpg
-  
+
   # Live webcam mode (CLI)
   python run.py --source face.jpg --webcam
-  
+
   # Live webcam with specific camera
   python run.py --source face.jpg --webcam --camera-index 1
         """,
@@ -172,8 +172,6 @@ def run_webcam_mode(source_face, face_analyser, args):
 
 def run_file_mode(source_face, face_analyser, args):
     """Process image or video file"""
-    import cv2
-    from core.engine.face_swapper import swap_face
 
     target_path = Path(args.target)
     if not target_path.exists():
@@ -192,9 +190,24 @@ def run_file_mode(source_face, face_analyser, args):
         )
         sys.exit(1)
 
+def setup_logging():
+    """Log to the console and to a rotating file at ~/.deepfacenet/deepfacenet.log"""
+    from logging.handlers import RotatingFileHandler
+
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    try:
+        log_dir = Path.home() / ".deepfacenet"
+        log_dir.mkdir(exist_ok=True)
+        handlers.append(RotatingFileHandler(log_dir / "deepfacenet.log", maxBytes=2_000_000, backupCount=3, encoding="utf-8"))
+    except OSError:
+        pass
+    logging.basicConfig(level=logging.INFO, format=fmt, handlers=handlers)
+
+
 def main():
     """Main entry point - routes to GUI or CLI based on arguments"""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    setup_logging()
 
     args = parse_arguments()
 

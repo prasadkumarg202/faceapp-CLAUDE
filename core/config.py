@@ -35,7 +35,11 @@ CAMERA_HEIGHT = 480
 CAMERA_FPS = 30
 
 # Face detection settings
-FACE_DETECTION_SIZE = (640, 640)
+FACE_DETECTION_SIZE = (640, 640)  # source image analysis
+# Detector input size for live frames. (480, 480) is ~36% faster (15.2 -> 9.7 ms on RTX 4000) and
+# still finds ~30 px faces, but the 5 keypoints shift up to ~2% of face width vs 640; check for
+# swap jitter on a live camera before lowering it. (320, 320) misses faces under ~40 px.
+LIVE_DETECTION_SIZE = (640, 640)
 FACE_CONFIDENCE_THRESHOLD = 0.5
 
 # Advanced Masking / Swapping

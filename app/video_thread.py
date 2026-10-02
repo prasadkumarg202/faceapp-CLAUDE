@@ -48,7 +48,6 @@ class VideoThread(QThread):
         self.camera_index = camera_index
         self.running = False
         self.swap_enabled = False
-        self.mouth_mask_enabled = False
         self.source_face = None
         self.cap = None
         self.face_analyser = None
@@ -72,10 +71,6 @@ class VideoThread(QThread):
     def enable_swap(self, enabled):
         """Enable or disable face swapping"""
         self.swap_enabled = enabled
-
-    def enable_mouth_mask(self, enabled):
-        """Enable or disable mouth masking"""
-        self.mouth_mask_enabled = enabled
 
     def set_virtual_camera(self, camera):
         """Send processed frames to a pyvirtualcam.Camera from the worker thread (None to stop)"""

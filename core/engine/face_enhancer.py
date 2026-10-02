@@ -7,7 +7,7 @@ from pathlib import Path
 import onnxruntime
 import core.config as config
 from core.config import ENHANCER_MODEL, ENHANCE_WEIGHT
-from core.runtime import get_providers, register_session
+from core.runtime import get_providers, register_session, log_throttled
 from core.engine.model_optimizer import ensure_mixed_precision_model
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ def get_face_enhancer() -> onnxruntime.InferenceSession:
             logger.info("Enhancer model: %s", Path(model_path).name)
             session_options = onnxruntime.SessionOptions()
             session_options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
-            
+
             _ENHANCER = onnxruntime.InferenceSession(
                 model_path,
                 sess_options=session_options,
@@ -143,36 +143,37 @@ def enhance_faces(frame: np.ndarray, faces: list, frame_size: tuple) -> np.ndarr
     input_name = input_info.name
     try:
         align_size = int(input_info.shape[2])
-        if align_size <= 0: align_size = 512
+        if align_size <= 0:
+            align_size = 512
     except (ValueError, TypeError, IndexError):
         align_size = 512
 
     result_frame = frame.copy()
-    
+
     for face in faces:
         if not hasattr(face, "kps") or face.kps is None:
             continue
-            
+
         landmarks_5 = face.kps.astype(np.float32)
         if landmarks_5.shape[0] < 5:
             continue
-            
+
         aligned_face, affine_matrix = _align_face(result_frame, landmarks_5, output_size=align_size)
         if aligned_face is None or affine_matrix is None:
             continue
-            
+
         try:
             input_tensor = _preprocess_face(aligned_face)
             output_tensor = session.run(None, {input_name: input_tensor})[0]
             enhanced_bgr = _postprocess_face(output_tensor)
-            
+
             eh, ew = enhanced_bgr.shape[:2]
             if eh != align_size or ew != align_size:
                 enhanced_bgr = cv2.resize(enhanced_bgr, (align_size, align_size), interpolation=cv2.INTER_LANCZOS4)
-                
+
             result_frame = _paste_back(result_frame, enhanced_bgr, affine_matrix, output_size=align_size, weight=ENHANCE_WEIGHT)
         except Exception as e:
-            print(f"Error enhancing face: {e}")
+            log_throttled(logger, "enhance", "Error enhancing face: %s", e)
             continue
-            
+
     return result_frame

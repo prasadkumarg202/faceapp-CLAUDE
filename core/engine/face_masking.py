@@ -1,8 +1,12 @@
+import logging
 import cv2
 import numpy as np
 from typing import Any
 import core.config as config
-from core.engine.gpu_processing import gpu_gaussian_blur, gpu_resize, gpu_cvt_color
+from core.runtime import log_throttled
+from core.engine.gpu_processing import gpu_gaussian_blur, gpu_resize
+
+logger = logging.getLogger(__name__)
 
 Face = Any
 Frame = np.ndarray
@@ -117,27 +121,27 @@ def create_eyes_mask(face: Face, frame: Frame) -> tuple[np.ndarray, np.ndarray |
     if landmarks is not None:
         left_eye = landmarks[87:96]
         right_eye = landmarks[33:42]
-        
+
         left_eye_center = np.mean(left_eye, axis=0).astype(np.int32)
         right_eye_center = np.mean(right_eye, axis=0).astype(np.int32)
-        
+
         def get_eye_dimensions(eye_points):
             x_coords = eye_points[:, 0]
             y_coords = eye_points[:, 1]
             width = int((np.max(x_coords) - np.min(x_coords)) * (1 + getattr(config, "MASK_DOWN_SIZE", 1.0) * getattr(config, "EYES_MASK_SIZE", 0.0)))
             height = int((np.max(y_coords) - np.min(y_coords)) * (1 + getattr(config, "MASK_DOWN_SIZE", 1.0) * getattr(config, "EYES_MASK_SIZE", 0.0)))
             return width, height
-        
+
         left_width, left_height = get_eye_dimensions(left_eye)
         right_width, right_height = get_eye_dimensions(right_eye)
-        
+
         padding = int(max(left_width, right_width) * 0.2)
-        
+
         min_x = min(left_eye_center[0] - left_width//2, right_eye_center[0] - right_width//2) - padding
         max_x = max(left_eye_center[0] + left_width//2, right_eye_center[0] + right_width//2) + padding
         min_y = min(left_eye_center[1] - left_height//2, right_eye_center[1] - right_height//2) - padding
         max_y = max(left_eye_center[1] + left_height//2, right_eye_center[1] + right_height//2) + padding
-        
+
         min_x = max(0, min_x)
         min_y = max(0, min_y)
         max_x = min(frame.shape[1], max_x)
@@ -146,29 +150,29 @@ def create_eyes_mask(face: Face, frame: Frame) -> tuple[np.ndarray, np.ndarray |
             return mask, None, (0, 0, 0, 0), None
 
         mask_roi = np.zeros((max_y - min_y, max_x - min_x), dtype=np.uint8)
-        
+
         left_center = (left_eye_center[0] - min_x, left_eye_center[1] - min_y)
         right_center = (right_eye_center[0] - min_x, right_eye_center[1] - min_y)
-        
+
         left_axes = (left_width//2, left_height//2)
         right_axes = (right_width//2, right_height//2)
-        
+
         cv2.ellipse(mask_roi, left_center, left_axes, 0, 0, 360, 255, -1)
         cv2.ellipse(mask_roi, right_center, right_axes, 0, 0, 360, 255, -1)
         mask_roi = gpu_gaussian_blur(mask_roi, (15, 15), 5)
         mask[min_y:max_y, min_x:max_x] = mask_roi
         eyes_cutout = frame[min_y:max_y, min_x:max_x].copy()
-        
+
         def create_ellipse_points(center, axes):
             t = np.linspace(0, 2*np.pi, 32)
             x = center[0] + axes[0] * np.cos(t)
             y = center[1] + axes[1] * np.sin(t)
             return np.column_stack((x, y)).astype(np.int32)
-        
+
         left_points = create_ellipse_points((left_eye_center[0], left_eye_center[1]), (left_width//2, left_height//2))
         right_points = create_ellipse_points((right_eye_center[0], right_eye_center[1]), (right_width//2, right_height//2))
         eyes_polygon = np.vstack([left_points, right_points])
-        
+
     return mask, eyes_cutout, (min_x, min_y, max_x, max_y), eyes_polygon
 
 def create_curved_eyebrow(points):
@@ -218,14 +222,14 @@ def create_eyebrows_mask(face: Face, frame: Frame) -> tuple[np.ndarray, np.ndarr
     if landmarks is not None:
         left_eyebrow = landmarks[97:105].astype(np.float32)
         right_eyebrow = landmarks[43:51].astype(np.float32)
-        
+
         all_points = np.vstack([left_eyebrow, right_eyebrow])
         padding_factor = getattr(config, "EYEBROWS_MASK_SIZE", 0.0)
         min_x = np.min(all_points[:, 0]) - 25 * padding_factor
         max_x = np.max(all_points[:, 0]) + 25 * padding_factor
         min_y = np.min(all_points[:, 1]) - 20 * padding_factor
         max_y = np.max(all_points[:, 1]) + 15 * padding_factor
-        
+
         min_x = max(0, int(min_x))
         min_y = max(0, int(min_y))
         max_x = min(frame.shape[1], int(max_x))
@@ -234,28 +238,28 @@ def create_eyebrows_mask(face: Face, frame: Frame) -> tuple[np.ndarray, np.ndarr
             return mask, None, (0, 0, 0, 0), None
 
         mask_roi = np.zeros((max_y - min_y, max_x - min_x), dtype=np.uint8)
-        
+
         try:
             left_local = left_eyebrow - [min_x, min_y]
             right_local = right_eyebrow - [min_x, min_y]
-            
+
             left_shape = create_curved_eyebrow(left_local)
             right_shape = create_curved_eyebrow(right_local)
-            
+
             mask_roi = gpu_gaussian_blur(mask_roi, (21, 21), 7)
             mask_roi = gpu_gaussian_blur(mask_roi, (11, 11), 3)
             mask_roi = gpu_gaussian_blur(mask_roi, (5, 5), 1)
             mask_roi = cv2.normalize(mask_roi, None, 0, 255, cv2.NORM_MINMAX)
-            
+
             mask[min_y:max_y, min_x:max_x] = mask_roi
             eyebrows_cutout = frame[min_y:max_y, min_x:max_x].copy()
-            
+
             eyebrows_polygon = np.vstack([
                 left_shape + [min_x, min_y],
                 right_shape + [min_x, min_y]
             ]).astype(np.int32)
-            
-        except Exception as e:
+
+        except Exception:
             left_local = left_eyebrow - [min_x, min_y]
             right_local = right_eyebrow - [min_x, min_y]
             cv2.fillPoly(mask_roi, [left_local.astype(np.int32)], 255)
@@ -264,7 +268,7 @@ def create_eyebrows_mask(face: Face, frame: Frame) -> tuple[np.ndarray, np.ndarr
             mask[min_y:max_y, min_x:max_x] = mask_roi
             eyebrows_cutout = frame[min_y:max_y, min_x:max_x].copy()
             eyebrows_polygon = np.vstack([left_eyebrow, right_eyebrow]).astype(np.int32)
-        
+
     return mask, eyebrows_cutout, (min_x, min_y, max_x, max_y), eyebrows_polygon
 
 def apply_mask_area(
@@ -299,7 +303,7 @@ def apply_mask_area(
         color_corrected_area = apply_color_transfer(resized_cutout, roi)
 
         polygon_mask = np.zeros(roi.shape[:2], dtype=np.uint8)
-        
+
         if len(polygon) > 50:
             mid_point = len(polygon) // 2
             left_points = polygon[:mid_point] - [min_x, min_y]
@@ -320,7 +324,7 @@ def apply_mask_area(
         )
         if feather_amount % 2 == 0:
             feather_amount += 1
-            
+
         feathered_mask = cv2.GaussianBlur(
             polygon_mask.astype(np.float32), (feather_amount, feather_amount), 0
         )
@@ -345,6 +349,6 @@ def apply_mask_area(
 
         frame[min_y:max_y, min_x:max_x] = final_blend.astype(np.uint8)
     except Exception as e:
-        print(f"Error applying mask area: {e}")
+        log_throttled(logger, "mask", "Error applying mask area: %s", e)
 
     return frame

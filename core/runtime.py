@@ -55,6 +55,19 @@ def register_session(name, session):
         logger.info("%s running on %s", name, active)
 
 
+_last_logged: dict[str, float] = {}
+
+
+def log_throttled(log, key, message, *args, interval=5.0):
+    """Log at most once per `interval` seconds per key (for errors that can repeat every frame)."""
+    import time
+
+    now = time.monotonic()
+    if now - _last_logged.get(key, 0.0) >= interval:
+        _last_logged[key] = now
+        log.warning(message, *args)
+
+
 def gpu_status():
     """Short summary for the GUI: ('GPU' | 'CPU' | 'Mixed' | None, details)."""
     if not ACTIVE_PROVIDERS:

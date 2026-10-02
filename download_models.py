@@ -1,5 +1,4 @@
 import argparse
-import io
 import time
 import zipfile
 from pathlib import Path
