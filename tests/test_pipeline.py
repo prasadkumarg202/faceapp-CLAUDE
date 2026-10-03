@@ -181,3 +181,22 @@ def test_mixed_models_output_float32():
             continue
         session = ort.InferenceSession(str(ensure_mixed_precision_model(fp32)), providers=get_providers())
         assert all(o.type == "tensor(float)" for o in session.get_outputs()), fp32.name
+
+
+@pytest.mark.parametrize("zoom", [1.6, 2.2, 3.0])
+def test_face_too_close_to_camera_is_still_detected_and_swapped(source_face, target, zoom):
+    """A face overflowing the frame is missed by the detector; the padded retry must find it."""
+    from core.face_analyser import get_live_face_analyser
+
+    live = get_live_face_analyser()
+    f = live.get(target)[0]
+    cx, cy = (f.bbox[:2] + f.bbox[2:]) / 2
+    M = np.float32([[zoom, 0, 320 - zoom * cx], [0, zoom, 260 - zoom * cy]])
+    close = cv2.warpAffine(target, M, (640, 480))
+    assert not live._analyser.get(close), "plain detector unexpectedly finds the close face"
+    faces = live.get(close)
+    assert len(faces) == 1
+    x1, y1, x2, y2 = faces[0].bbox
+    assert x1 < 320 < x2 and y1 < 260 < y2, "bbox not mapped back to frame coordinates"
+    out, count = detect_and_swap(source_face, close.copy(), live)
+    assert count == 1 and cv2.absdiff(out, close).mean() > 2
