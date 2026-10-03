@@ -29,11 +29,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seconds", type=float, default=30)
     parser.add_argument("--enhance", action="store_true")
+    parser.add_argument("--occlusion", action="store_true")
     args = parser.parse_args()
 
     QCoreApplication.instance() or QCoreApplication([])
     vt.cv2.VideoCapture = FakeCapture
     config.ENHANCE_ENABLED = args.enhance
+    config.OCCLUSION_MASK_ENABLED = args.occlusion
     if args.enhance:
         from core.engine.face_enhancer import get_face_enhancer
         get_face_enhancer()
@@ -59,7 +61,7 @@ def main():
     thread.stop()
     fps = (len(times) - 1) / (times[-1] - times[0])
     lat = latency_stats(latency)
-    print(f"> enhance={args.enhance}  {fps:.1f} FPS  latency p50 {lat['p50_ms']} ms  p95 {lat['p95_ms']} ms  frames {len(times)}")
+    print(f"> enhance={args.enhance} occlusion={args.occlusion}  {fps:.1f} FPS  latency p50 {lat['p50_ms']} ms  p95 {lat['p95_ms']} ms  frames {len(times)}")
 
 
 if __name__ == "__main__":

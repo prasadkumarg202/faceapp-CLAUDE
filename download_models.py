@@ -30,6 +30,14 @@ MODELS = {
         "description": "Face enhancement model (ONNX)",
         "location": "models",
     },
+    "xseg_2.onnx": {
+        "url": "https://github.com/facefusion/facefusion-assets/releases/download/models-3.1.0/xseg_2.onnx",
+        "size": 70324286,
+        "type": "occlusion",
+        "required": False,
+        "description": "Occlusion mask (keeps hands/objects in front of the face)",
+        "location": "models",
+    },
     "buffalo_l": {
         "url": "https://github.com/deepinsight/insightface/releases/download/v0.7/buffalo_l.zip",
         "size": 288621354,

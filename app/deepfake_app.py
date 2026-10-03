@@ -904,6 +904,25 @@ class DeepfakeApp(QMainWindow):
         self.poisson_blend_checkbox.setStyleSheet("QCheckBox { color: #ffffff; }")
         advanced_layout.addWidget(self.poisson_blend_checkbox)
 
+        # Occlusion mask checkbox
+        self.occlusion_checkbox = QCheckBox("Keep Hands/Objects in Front of Face (slower)")
+        self.occlusion_checkbox.setToolTip(
+            "Hands, microphones, cups or phones in front of the face are not painted over. "
+            "Costs ~26 ms per frame; needs the occlusion model (Models tab)."
+        )
+        from core import config as _cfg
+        self.occlusion_checkbox.setChecked(_cfg.OCCLUSION_MASK_ENABLED)
+        def _toggle_occlusion(state):
+            from core import config
+            config.OCCLUSION_MASK_ENABLED = (state == Qt.CheckState.Checked.value)
+            if config.OCCLUSION_MASK_ENABLED:
+                from core.engine.occlusion import get_occlusion_model
+                if get_occlusion_model() is None:
+                    self.status_label.setText("Occlusion model not downloaded - get it in the Models tab")
+        self.occlusion_checkbox.stateChanged.connect(_toggle_occlusion)
+        self.occlusion_checkbox.setStyleSheet("QCheckBox { color: #ffffff; }")
+        advanced_layout.addWidget(self.occlusion_checkbox)
+
         # GFPGAN enhancement checkbox
         self.enhance_checkbox = QCheckBox("Enhance Face (GFPGAN, slower)")
         self.enhance_checkbox.setEnabled(False)
@@ -954,6 +973,7 @@ class DeepfakeApp(QMainWindow):
             ("Detect (buffalo_l)", analyser_ok),
             ("Swap (inswapper)", SWAPPER_MODEL.exists()),
             ("Enhance (GFPGAN)", ENHANCER_MODEL.exists()),
+            ("Occlusion (XSeg)", check_model_status("xseg_2.onnx")[0]),
         ]
         for name, ok in _models_to_show:
             row = QHBoxLayout()

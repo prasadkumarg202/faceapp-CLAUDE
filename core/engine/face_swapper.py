@@ -46,7 +46,8 @@ def swap_face(source_face, target_face, frame):
     eyes_mask_enabled = getattr(config, "EYES_MASK_ENABLED", False)
     eyebrows_mask_enabled = getattr(config, "EYEBROWS_MASK_ENABLED", False)
 
-    original_frame = frame.copy() if (opacity < 1.0 or mouth_mask_enabled or eyes_mask_enabled or eyebrows_mask_enabled) else frame
+    occlusion_mask_enabled = getattr(config, "OCCLUSION_MASK_ENABLED", False)
+    original_frame = frame.copy() if (opacity < 1.0 or mouth_mask_enabled or eyes_mask_enabled or eyebrows_mask_enabled or occlusion_mask_enabled) else frame
 
     temp_frame = frame
     if temp_frame.dtype != np.uint8:
@@ -66,6 +67,11 @@ def swap_face(source_face, target_face, frame):
     except Exception as e:
         log_throttled(logger, "swap", "Error during swap: %s", e)
         return original_frame
+
+    # Objects in front of the face (hands, mics, cups) keep their original pixels
+    if occlusion_mask_enabled:
+        from core.engine.occlusion import keep_occluders
+        swapped_frame = keep_occluders(original_frame, swapped_frame, target_face)
 
     # Masking
     face_mask = None

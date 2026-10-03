@@ -146,6 +146,9 @@ class VideoThread(QThread):
             get_face_swapper()
         except Exception as e:
             logger.warning("Face swapper unavailable: %s", e)
+        if getattr(config, "OCCLUSION_MASK_ENABLED", False):
+            from core.engine.occlusion import get_occlusion_model
+            get_occlusion_model()  # no-op if the model isn't downloaded
 
     def _process_loop(self):
         """Processing worker: always process the newest frame, emit only processed frames"""
