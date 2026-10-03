@@ -7,6 +7,7 @@ is registered here so the fallback is logged and visible in the GUI.
 
 import logging
 import threading
+from pathlib import Path
 
 import onnxruntime
 
@@ -24,11 +25,25 @@ def preload_cuda_dlls():
         if _PRELOADED:
             return
         _PRELOADED = True
+        _add_bundled_nvidia_dll_dirs()
         if hasattr(onnxruntime, "preload_dlls"):
             try:
                 onnxruntime.preload_dlls()
             except Exception as e:
                 logger.warning("onnxruntime.preload_dlls() failed: %s", e)
+
+
+def _add_bundled_nvidia_dll_dirs():
+    """Packaged build: make the bundled CUDA/cuDNN DLLs (nvidia/*/bin) findable by ONNX Runtime."""
+    import os
+    import sys
+
+    base = getattr(sys, "_MEIPASS", None)
+    if base is None or sys.platform != "win32":
+        return
+    for folder in sorted(Path(base).glob("nvidia/*/bin")):
+        os.environ["PATH"] = str(folder) + os.pathsep + os.environ.get("PATH", "")
+        os.add_dll_directory(str(folder))
 
 
 def get_providers():

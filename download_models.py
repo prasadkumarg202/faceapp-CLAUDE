@@ -71,7 +71,8 @@ def get_model_path(model_name):
         return None
 
     if info["location"] == "insightface":
-        return Path.home() / ".insightface" / "models" / model_name
+        base = config.INSIGHTFACE_DIR if CONFIG_LOADED else Path.home() / ".insightface" / "models"
+        return base / model_name
     else:
         base = config.MODELS_DIR if CONFIG_LOADED else Path("models")
         return base / model_name

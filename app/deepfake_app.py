@@ -1619,10 +1619,16 @@ class DeepfakeApp(QMainWindow):
             if self.settings_file.exists():
                 with open(self.settings_file, 'r') as f:
                     self._settings = json.load(f)
-                    return self._settings.get('working_dir', str(Path.home()))
+                    return self._settings.get('working_dir', self._default_photo_dir())
         except Exception as e:
             logger.warning("Error loading settings: %s", e)
-        return str(Path.home())
+        return self._default_photo_dir()
+
+    @staticmethod
+    def _default_photo_dir():
+        """Open the photo picker in the bundled source_faces folder when there is one."""
+        from core.config import SOURCE_FACES_DIR
+        return str(SOURCE_FACES_DIR) if SOURCE_FACES_DIR.is_dir() else str(Path.home())
 
     def save_settings(self):
         """Save settings to JSON file"""

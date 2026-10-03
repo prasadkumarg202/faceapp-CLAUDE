@@ -1,10 +1,15 @@
+import sys
 from pathlib import Path
 from typing import Literal
 
 # ---------------- Paths ----------------
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+# Packaged (PyInstaller) build: models, insightface pack and source_faces live next to the .exe,
+# so the whole folder can be copied to another PC.
+FROZEN = getattr(sys, "frozen", False)
+BASE_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent.parent
 MODELS_DIR = BASE_DIR / "models"
+SOURCE_FACES_DIR = BASE_DIR / "source_faces"
 
 
 ANALYSIS_MODEL = "buffalo_l"
@@ -32,7 +37,10 @@ TEMPORAL_SMOOTHING = True
 OCCLUSION_MODEL = MODELS_DIR / "xseg_2.onnx"
 OCCLUSION_MASK_ENABLED = False
 
-INSIGHTFACE_DIR = Path.home() / ".insightface" / "models"
+# insightface packs (buffalo_l): a bundled copy next to the app wins over ~/.insightface
+_BUNDLED_INSIGHTFACE = BASE_DIR / "insightface" / "models"
+INSIGHTFACE_DIR = _BUNDLED_INSIGHTFACE if (_BUNDLED_INSIGHTFACE / "buffalo_l").is_dir() else Path.home() / ".insightface" / "models"
+INSIGHTFACE_ROOT = INSIGHTFACE_DIR.parent  # FaceAnalysis(root=...) expects <root>/models/<pack>
 BUFFALO_L_DIR = INSIGHTFACE_DIR / "buffalo_l"
 
 # ---------------- Application Settings ----------------

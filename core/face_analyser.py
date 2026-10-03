@@ -2,7 +2,9 @@ import cv2
 import insightface
 import threading
 
-from core.config import ANALYSIS_MODEL, FACE_CONFIDENCE_THRESHOLD, FACE_DETECTION_SIZE, LIVE_DETECTION_SIZE
+from core.config import (
+    ANALYSIS_MODEL, FACE_CONFIDENCE_THRESHOLD, FACE_DETECTION_SIZE, INSIGHTFACE_ROOT, LIVE_DETECTION_SIZE,
+)
 from core.runtime import get_providers, register_session
 from download_models import check_model_status
 
@@ -53,7 +55,7 @@ def _create_analyser(allowed_modules, label, det_size):
         raise Exception(f"The '{ANALYSIS_MODEL}' model is not loaded/downloaded. Please go to the Models tab to download it first.")
 
     analyser = insightface.app.FaceAnalysis(
-        name=ANALYSIS_MODEL, allowed_modules=allowed_modules, providers=get_providers()
+        name=ANALYSIS_MODEL, root=str(INSIGHTFACE_ROOT), allowed_modules=allowed_modules, providers=get_providers()
     )
     analyser.prepare(ctx_id=0, det_thresh=FACE_CONFIDENCE_THRESHOLD, det_size=det_size)
     for task, model in analyser.models.items():
