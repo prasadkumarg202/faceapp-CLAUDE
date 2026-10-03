@@ -49,6 +49,22 @@ from download_models import MODELS, DownloadCancelled, check_model_status, fetch
 logger = logging.getLogger(__name__)
 
 
+def model_size_text(model_info, is_downloaded, current_size, path):
+    """Size line for a model card. Zip packs are bigger once unpacked, so label both sizes."""
+    expected = format_size(model_info.get("size", 0))
+    if model_info.get("location") == "insightface":
+        text = f"Download: {expected} (zip)"
+        if is_downloaded:
+            text += f"  |  Installed: {format_size(current_size)}"
+    else:
+        text = f"Size: {expected}"
+        if is_downloaded:
+            text += f"  |  Downloaded: {format_size(current_size)}"
+    if is_downloaded and path:
+        text += f"  |  {path}"
+    return text
+
+
 class ModelDownloadThread(QThread):
     """Background thread for downloading a model file"""
 
@@ -97,17 +113,24 @@ class CameraDetectionThread(QThread):
     def run(self):
         """Detect available cameras in background"""
         available = []
-        # Test camera indices 0-5 (covers most cases, faster than 0-10)
-        for i in range(self.max_cameras):
-            cap = cv2.VideoCapture(i)
-            if cap.isOpened():
-                # Try to read a frame to verify camera works
-                # Set a short timeout to avoid long waits
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                ret, _ = cap.read()
-                if ret:
-                    available.append(i)
+        # Probing an index with no camera makes OpenCV try every backend (FFMPEG, depth-camera
+        # "obsensor", ...) and print warnings/errors; on Windows only Media Foundation is relevant.
+        backend = cv2.CAP_MSMF if sys.platform == "win32" else cv2.CAP_ANY
+        log_level = cv2.utils.logging.getLogLevel()
+        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+        try:
+            # Test camera indices 0-5 (covers most cases, faster than 0-10)
+            for i in range(self.max_cameras):
+                cap = cv2.VideoCapture(i, backend)
+                if cap.isOpened():
+                    # Try to read a frame to verify camera works
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    ret, _ = cap.read()
+                    if ret:
+                        available.append(i)
                 cap.release()
+        finally:
+            cv2.utils.logging.setLogLevel(log_level)
 
         self.cameras_detected.emit(available)
 
@@ -362,7 +385,6 @@ class DeepfakeApp(QMainWindow):
     def _create_model_card(self, model_name, model_info):
         """Create a single model card widget"""
         is_downloaded, path, current_size = check_model_status(model_name)
-        expected_size = model_info.get("size", 0)
         is_required = model_info.get("required", False)
 
         card = QFrame()
@@ -387,7 +409,7 @@ class DeepfakeApp(QMainWindow):
         else:
             status_icon = QLabel("[!!]")
             status_icon.setStyleSheet("font-size: 12px; font-weight: bold; color: #FF9800; border: none;")
-        status_icon.setFixedWidth(30)
+        status_icon.setMinimumWidth(40)
         top_row.addWidget(status_icon)
 
         name_label = QLabel(model_name)
@@ -429,12 +451,7 @@ class DeepfakeApp(QMainWindow):
         desc_label.setStyleSheet("color: #aaa; font-size: 11px; border: none;")
         card_layout.addWidget(desc_label)
 
-        size_text = f"Size: {format_size(expected_size)}"
-        if is_downloaded:
-            size_text += f"  |  Downloaded: {format_size(current_size)}"
-            if path:
-                size_text += f"  |  {path}"
-        size_label = QLabel(size_text)
+        size_label = QLabel(model_size_text(model_info, is_downloaded, current_size, path))
         size_label.setStyleSheet("color: #777; font-size: 10px; border: none;")
         size_label.setWordWrap(True)
         card_layout.addWidget(size_label)
@@ -570,11 +587,7 @@ class DeepfakeApp(QMainWindow):
             # Update size label
             is_downloaded, path, current_size = check_model_status(model_name)
             model_info = MODELS.get(model_name, {})
-            expected_size = model_info.get("size", 0)
-            size_text = f"Size: {format_size(expected_size)}  |  Downloaded: {format_size(current_size)}"
-            if path:
-                size_text += f"  |  {path}"
-            widgets["size_label"].setText(size_text)
+            widgets["size_label"].setText(model_size_text(model_info, is_downloaded, current_size, path))
 
         self._active_downloads.pop(model_name, None)
 
@@ -616,7 +629,6 @@ class DeepfakeApp(QMainWindow):
             widgets = self._model_cards[model_name]
             model_info = MODELS.get(model_name, {})
             is_downloaded, path, current_size = check_model_status(model_name)
-            expected_size = model_info.get("size", 0)
 
             if is_downloaded:
                 widgets["status_icon"].setText("[OK]")
@@ -625,12 +637,7 @@ class DeepfakeApp(QMainWindow):
                 widgets["status_icon"].setText("[!!]")
                 widgets["status_icon"].setStyleSheet("font-size: 12px; font-weight: bold; color: #FF9800; border: none;")
 
-            size_text = f"Size: {format_size(expected_size)}"
-            if is_downloaded:
-                size_text += f"  |  Downloaded: {format_size(current_size)}"
-                if path:
-                    size_text += f"  |  {path}"
-            widgets["size_label"].setText(size_text)
+            widgets["size_label"].setText(model_size_text(model_info, is_downloaded, current_size, path))
 
             if is_downloaded:
                 widgets["dl_btn"].setText("Re-download")

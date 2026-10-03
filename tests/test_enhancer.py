@@ -69,16 +69,36 @@ def test_mixed_precision_enhancer_matches_fp32(face):
 
 
 def test_pipeline_streams_until_enhancer_ready_then_enhances(monkeypatch):
+    """Frames keep flowing while the enhancer loads; once loaded, frames are enhanced.
+
+    Loading is held on an Event, so the test proves "did not wait for the enhancer" without
+    relying on timing (a shared GPU can make the first frame slow on its own).
+    """
+    import threading
+
     monkeypatch.setattr(config, "ENHANCE_ENABLED", True)
     monkeypatch.setattr(fe, "_ENHANCER", None)
     monkeypatch.setattr(fe, "_WARMING", type(fe._WARMING)())
+    release = threading.Event()
+    real_get = fe.get_face_enhancer
+
+    def blocked_get():
+        release.wait(timeout=60)
+        return real_get()
+
+    monkeypatch.setattr(fe, "get_face_enhancer", blocked_get)
     source = get_face_analyser().get(cv2.imread(str(ROOT / "assets" / "elon_musk.jpg")))[0]
     analyser = get_live_face_analyser()
 
-    start = time.perf_counter()
-    unenhanced, _ = detect_and_swap(source, TARGET.copy(), analyser)
-    assert time.perf_counter() - start < 1.0, "first frame blocked on enhancer loading"
+    result = {}
+    worker = threading.Thread(target=lambda: result.update(frame=detect_and_swap(source, TARGET.copy(), analyser)[0]))
+    worker.start()
+    worker.join(timeout=30)
+    assert not worker.is_alive(), "frame processing waited for the enhancer to load"
+    assert not fe.is_enhancer_ready()
+    unenhanced = result["frame"]
 
+    release.set()
     deadline = time.time() + 120
     while not fe.is_enhancer_ready() and time.time() < deadline:
         time.sleep(0.2)

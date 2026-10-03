@@ -203,6 +203,9 @@ def main():
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")
     setup_logging()
+    # insightface calls a scikit-image API deprecated upstream; harmless, but alarming in the console
+    import warnings
+    warnings.filterwarnings("ignore", message=r".*`estimate` is deprecated.*", category=FutureWarning)
 
     args = parse_arguments()
 
