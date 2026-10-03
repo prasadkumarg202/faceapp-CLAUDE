@@ -51,8 +51,8 @@ logger = logging.getLogger(__name__)
 
 # One-click presets for the Advanced Settings checkboxes
 QUALITY_MODES = {
-    "Fast": {"enhance": False, "occlusion": False},
-    "Quality": {"enhance": True, "occlusion": True},
+    "Fast": {"enhance": False, "occlusion": False, "seamless": False},
+    "Quality": {"enhance": True, "occlusion": True, "seamless": False},
 }
 
 
@@ -924,6 +924,7 @@ class DeepfakeApp(QMainWindow):
             from core import config
             config.POISSON_BLEND_ENABLED = (state == Qt.CheckState.Checked.value)
         self.poisson_blend_checkbox.stateChanged.connect(_toggle_poisson)
+        self.poisson_blend_checkbox.stateChanged.connect(self._sync_mode_from_checkboxes)
         self.poisson_blend_checkbox.setStyleSheet("QCheckBox { color: #ffffff; }")
         advanced_layout.addWidget(self.poisson_blend_checkbox)
 
@@ -1320,6 +1321,7 @@ class DeepfakeApp(QMainWindow):
         try:
             self.enhance_checkbox.setChecked(preset["enhance"])
             self.occlusion_checkbox.setChecked(preset["occlusion"])
+            self.poisson_blend_checkbox.setChecked(preset["seamless"])
         finally:
             self._applying_mode = False
 
@@ -1327,7 +1329,11 @@ class DeepfakeApp(QMainWindow):
         """A checkbox changed by hand: show the matching preset, or Custom."""
         if self._applying_mode:
             return
-        current = {"enhance": self.enhance_checkbox.isChecked(), "occlusion": self.occlusion_checkbox.isChecked()}
+        current = {
+            "enhance": self.enhance_checkbox.isChecked(),
+            "occlusion": self.occlusion_checkbox.isChecked(),
+            "seamless": self.poisson_blend_checkbox.isChecked(),
+        }
         name = next((n for n, p in QUALITY_MODES.items() if p == current), "Custom")
         self.mode_combo.blockSignals(True)
         self.mode_combo.setCurrentText(name)

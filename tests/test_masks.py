@@ -54,3 +54,21 @@ def test_swap_with_all_masks_survives_off_frame_faces(face, shift, monkeypatch):
     source = get_face_analyser().get(cv2.imread(str(ROOT / "assets" / "elon_musk.jpg")))[0]
     out = swap_face(source, ShiftedFace(face, *SHIFTS[shift]), FRAME.copy())
     assert out.shape == FRAME.shape
+
+
+def test_seamless_blending_keeps_chin_tone(face, monkeypatch):
+    """Poisson cloning used to pull colours from the jaw edge into the chin (white/grey patch)."""
+    img = cv2.resize(cv2.imread(str(ROOT / "assets" / "vijay.jpg")), (640, 480))
+    source = get_face_analyser().get(cv2.imread(str(ROOT / "assets" / "elon_musk.jpg")))[0]
+    lm = face.landmark_2d_106
+    y0, y1 = int(lm[52:72, 1].max()) + 5, int(lm[0:33, 1].max()) - 5
+    x0, x1 = int(lm[52:72, 0].min()), int(lm[52:72, 0].max())
+
+    def chin(im):
+        return cv2.cvtColor(im[y0:y1, x0:x1], cv2.COLOR_BGR2LAB)[..., 0].mean()
+
+    monkeypatch.setattr(config, "POISSON_BLEND_ENABLED", False)
+    plain = chin(swap_face(source, face, img.copy()))
+    monkeypatch.setattr(config, "POISSON_BLEND_ENABLED", True)
+    seamless = chin(swap_face(source, face, img.copy()))
+    assert abs(seamless - plain) < 2.0, f"seamless blending shifted chin brightness by {seamless - plain:+.1f}"
