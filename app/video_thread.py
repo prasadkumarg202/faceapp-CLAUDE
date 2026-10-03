@@ -33,6 +33,48 @@ logger = logging.getLogger(__name__)
 # Consecutive failed camera reads tolerated before giving up (~1-2 s at 30 fps)
 MAX_READ_FAILURES = 30
 
+# Widescreen virtual-camera output: where the face centre sits vertically in the 16:9 crop
+# (slightly above the middle reads as natural head room), and how quickly the crop follows it.
+FACE_POSITION_IN_CROP = 0.45
+CROP_FOLLOW = 0.2
+
+
+def widescreen_crop_top(frame_h, out_h, face_cy, previous_top=None):
+    """Top row of a full-width crop of height `out_h` that keeps the face in view.
+
+    `face_cy` is the face centre (None: no face, keep the previous crop or centre it). The crop
+    moves smoothly towards its target so small head movements don't make the picture jump.
+    """
+    max_top = max(frame_h - out_h, 0)
+    if face_cy is None:
+        target = previous_top if previous_top is not None else max_top / 2
+    else:
+        target = face_cy - FACE_POSITION_IN_CROP * out_h
+    target = min(max(target, 0), max_top)
+    if previous_top is None:
+        return float(target)
+    return float(previous_top + CROP_FOLLOW * (target - previous_top))
+
+
+class _FaceRecorder:
+    """Passes detection through and remembers the largest face's centre (for the widescreen crop)."""
+
+    def __init__(self, analyser, owner):
+        self._analyser = analyser
+        self._owner = owner
+
+    def __getattr__(self, name):
+        return getattr(self._analyser, name)
+
+    def get(self, frame, *args, **kwargs):
+        faces = self._analyser.get(frame, *args, **kwargs)
+        if faces:
+            x1, y1, x2, y2 = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])).bbox
+            self._owner.face_center_y = float(y1 + y2) / 2
+        else:
+            self._owner.face_center_y = None
+        return faces
+
 
 class VideoThread(QThread):
     """Worker thread for video capture and face swapping"""
@@ -63,6 +105,9 @@ class VideoThread(QThread):
         self._display_ready.set()
         self._virtual_cam = None
         self._virtual_cam_lock = threading.Lock()
+        self._virtual_cam_height = None  # crop height for widescreen output (None: full frame)
+        self._crop_top = None
+        self.face_center_y = None
 
     def set_source_face(self, source_face):
         """Set the source face for swapping"""
@@ -72,10 +117,16 @@ class VideoThread(QThread):
         """Enable or disable face swapping"""
         self.swap_enabled = enabled
 
-    def set_virtual_camera(self, camera):
-        """Send processed frames to a pyvirtualcam.Camera from the worker thread (None to stop)"""
+    def set_virtual_camera(self, camera, crop_height=None):
+        """Send processed frames to a pyvirtualcam.Camera from the worker thread (None to stop).
+
+        With `crop_height`, frames are cropped to that height around the face (e.g. 640x360
+        from 640x480 for a 16:9 picture that fills the Meet/Zoom tile).
+        """
         with self._virtual_cam_lock:
             self._virtual_cam = camera
+            self._virtual_cam_height = crop_height
+            self._crop_top = None
 
     def frame_displayed(self):
         """Called by the GUI after drawing a frame; allows the next frame to be emitted"""
@@ -141,6 +192,7 @@ class VideoThread(QThread):
             if getattr(config, "TEMPORAL_SMOOTHING", False):
                 from core.engine.stabilizer import StabilizedAnalyser
                 self.face_analyser = StabilizedAnalyser(self.face_analyser)  # per-session state
+            self.face_analyser = _FaceRecorder(self.face_analyser, self)
         except Exception as e:
             logger.warning("Face analyser unavailable: %s", e)
             self.face_analyser = None
@@ -198,6 +250,12 @@ class VideoThread(QThread):
             camera = self._virtual_cam
             if camera is None:
                 return
+            if self._virtual_cam_height and self._virtual_cam_height < frame.shape[0]:
+                self._crop_top = widescreen_crop_top(
+                    frame.shape[0], self._virtual_cam_height, self.face_center_y, self._crop_top
+                )
+                top = int(round(self._crop_top))
+                frame = np.ascontiguousarray(frame[top:top + self._virtual_cam_height])
             try:
                 camera.send(frame)
             except Exception as e:

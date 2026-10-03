@@ -4,6 +4,7 @@ A professional PyQt6 application for live deepfake face swapping
 """
 
 import sys
+import os
 import logging
 import cv2
 import numpy as np
@@ -39,7 +40,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSlider,
 )
-from PyQt6.QtCore import Qt, QUrl, QThread, pyqtSignal, PYQT_VERSION_STR, qVersion
+from PyQt6.QtCore import Qt, QTimer, QUrl, QThread, pyqtSignal, PYQT_VERSION_STR, qVersion
 from PyQt6.QtGui import QImage, QPixmap, QFont, QDesktopServices, QIcon
 
 from app.video_thread import VideoThread
@@ -268,7 +269,11 @@ class DeepfakeApp(QMainWindow):
         self._model_cards = {}  # model_name -> dict of widgets
 
         # Settings
-        self.settings_file = Path.home() / ".deepfacenet_settings.json"
+        # DEEPFACENET_SETTINGS lets tests use a temporary file instead of the user's settings
+        self.settings_file = Path(os.environ.get("DEEPFACENET_SETTINGS", Path.home() / ".deepfacenet_settings.json"))
+        self._settings = {}
+        self._restoring = False  # True while settings are being re-applied (don't save them back)
+        self._stopping = False  # True while Stop Camera resets controls (not a user choice)
         self.working_dir = self.load_settings()
 
         # Initialize UI
@@ -276,6 +281,9 @@ class DeepfakeApp(QMainWindow):
 
         # Apply modern styling
         self.apply_styles()
+
+        # Re-apply the last session's source photos, mode and output options
+        QTimer.singleShot(0, self._restore_session)
 
     def init_ui(self):
         """Initialize the user interface"""
@@ -791,7 +799,7 @@ class DeepfakeApp(QMainWindow):
         camera_layout.setSpacing(8)
 
         # Camera selection
-        camera_select_label = QLabel("Select Camera:")
+        camera_select_label = QLabel("Input camera (your webcam):")
         camera_select_label.setStyleSheet("color: #ffffff; font-weight: bold; margin-top: 5px;")
         camera_layout.addWidget(camera_select_label)
 
@@ -865,6 +873,9 @@ class DeepfakeApp(QMainWindow):
             "Quality: face enhancement + keep hands/objects, sharpest result, lower FPS."
         )
         self.mode_combo.currentTextChanged.connect(self._apply_mode)
+        self.mode_combo.currentTextChanged.connect(
+            lambda text: self._remember("mode", text) if text in QUALITY_MODES else None
+        )
         mode_row.addWidget(mode_label)
         mode_row.addWidget(self.mode_combo, stretch=1)
         advanced_layout.addLayout(mode_row)
@@ -973,15 +984,29 @@ class DeepfakeApp(QMainWindow):
 
         # Virtual camera checkbox (only if available)
         if VIRTUAL_CAM_AVAILABLE:
-            self.virtual_cam_checkbox = QCheckBox("Enable Virtual Camera")
+            self.virtual_cam_checkbox = QCheckBox("Send to Meet / Zoom (virtual camera)")
             self.virtual_cam_checkbox.setEnabled(False)
             self.virtual_cam_checkbox.stateChanged.connect(self.toggle_virtual_camera)
             self.virtual_cam_checkbox.setStyleSheet(
                 "QCheckBox { color: #ffffff; padding: 8px 5px; }"
                 "QCheckBox::indicator { width: 18px; height: 18px; }"
             )
-            self.virtual_cam_checkbox.setToolTip("Stream to virtual webcam for OBS/Zoom/Discord")
+            self.virtual_cam_checkbox.setToolTip(
+                "Sends the face-swapped video to 'OBS Virtual Camera'. In Meet/Zoom/Teams choose "
+                "OBS Virtual Camera as the camera. Keep this app open during the call."
+            )
             camera_layout.addWidget(self.virtual_cam_checkbox)
+
+            # 16:9 output fills the Meet/Zoom video tile (4:3 gets black bars at the sides)
+            self.widescreen_checkbox = QCheckBox("Widescreen 16:9 (fills the Meet/Zoom tile)")
+            self.widescreen_checkbox.setChecked(True)
+            self.widescreen_checkbox.setToolTip(
+                "Crops the virtual camera picture to 16:9 around your face. The preview here still "
+                "shows the full camera image."
+            )
+            self.widescreen_checkbox.setStyleSheet("QCheckBox { color: #ffffff; padding: 0 5px 8px 5px; }")
+            self.widescreen_checkbox.stateChanged.connect(self._toggle_widescreen)
+            camera_layout.addWidget(self.widescreen_checkbox)
 
         camera_group.setLayout(camera_layout)
         layout.addWidget(camera_group)
@@ -1033,12 +1058,16 @@ class DeepfakeApp(QMainWindow):
         info_layout.setContentsMargins(10, 25, 10, 10)
 
         info_text = QLabel(
-            "1. Select a source image\n"
-            "2. Start the camera\n"
-            "3. Enable face swap\n\n"
-            "The source face will be\n"
-            "swapped onto detected faces\n"
-            "in the live video feed."
+            "1. Select source photo(s) - several\n"
+            "   photos of one person work best\n"
+            "2. Start Camera\n"
+            "3. Enable Face Swap\n"
+            "4. Tick 'Send to Meet / Zoom'\n"
+            "5. In Meet/Zoom, choose camera\n"
+            "   'OBS Virtual Camera'\n"
+            "\n"
+            "Your choices are remembered: next\n"
+            "time just press Start Camera."
         )
         info_text.setWordWrap(True)
         info_text.setStyleSheet("color: #aaa; font-size: 11px;")
@@ -1115,7 +1144,11 @@ class DeepfakeApp(QMainWindow):
             self.working_dir,
             "Image Files (*.png *.jpg *.jpeg *.bmp *.webp)",
         )
+        if file_paths:
+            self._load_source(file_paths)
 
+    def _load_source(self, file_paths, quiet=False):
+        """Build the source identity from photos; `quiet` skips the error pop-up (session restore)."""
         if file_paths:
             try:
                 from core.source_faces import build_source_identity
@@ -1128,7 +1161,8 @@ class DeepfakeApp(QMainWindow):
                     identity = build_source_identity(file_paths, get_face_analyser())
                 except ValueError as e:
                     QApplication.restoreOverrideCursor()
-                    QMessageBox.warning(self, "No Face Detected", f"{e} Please choose photos with a clear face.")
+                    if not quiet:
+                        QMessageBox.warning(self, "No Face Detected", f"{e} Please choose photos with a clear face.")
                     self.status_label.setText("Ready")
                     return
 
@@ -1146,6 +1180,7 @@ class DeepfakeApp(QMainWindow):
                 self.source_status.setStyleSheet("color: #4CAF50;")
                 self.btn_clear_live_source.setEnabled(True)
                 logger.info("Source identity: %s", identity.summary())
+                self._remember("source_paths", [str(p) for p in file_paths])
 
                 # Update video thread if running
                 if self.video_thread is not None:
@@ -1259,12 +1294,20 @@ class DeepfakeApp(QMainWindow):
             self.missing_model_banner.setVisible(not is_downloaded)
 
             self.status_label.setText(f"Camera {self.selected_camera_index} started")
+            QTimer.singleShot(800, self._restore_live_state)
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to start camera: {str(e)}")
 
     def stop_camera(self):
         """Stop video capture"""
+        self._stopping = True
+        try:
+            self._stop_camera()
+        finally:
+            self._stopping = False
+
+    def _stop_camera(self):
         self.missing_model_banner.setVisible(False)
         if self.video_thread is not None:
             self.video_thread.stop()
@@ -1345,6 +1388,7 @@ class DeepfakeApp(QMainWindow):
             current_state = self.video_thread.swap_enabled
             new_state = not current_state
             self.video_thread.enable_swap(new_state)
+            self._remember("face_swap", new_state)
 
             if new_state:
                 self.swap_btn.setText("Disable Face Swap")
@@ -1379,6 +1423,7 @@ class DeepfakeApp(QMainWindow):
             return
 
         enabled = state == Qt.CheckState.Checked.value
+        self._remember("virtual_camera", enabled)
 
         if enabled:
             # Check if camera is running
@@ -1400,10 +1445,18 @@ class DeepfakeApp(QMainWindow):
                     # Fallback to common resolution
                     width, height = 640, 480
 
-                # Create virtual camera with actual camera resolution
+                # 16:9 output: same width, cropped height (640x480 -> 640x360), crop follows the face
+                crop_height = None
+                if self.widescreen_checkbox.isChecked():
+                    crop_height = int(round(width * 9 / 16 / 2)) * 2
+                    if crop_height < height:
+                        height = crop_height
+                    else:
+                        crop_height = None
+
                 self.virtual_cam = pyvirtualcam.Camera(width=width, height=height, fps=30, fmt=pyvirtualcam.PixelFormat.BGR)
                 self.virtual_cam_enabled = True
-                self.video_thread.set_virtual_camera(self.virtual_cam)
+                self.video_thread.set_virtual_camera(self.virtual_cam, crop_height)
                 self.status_label.setText(f"Virtual camera started: {self.virtual_cam.device} ({width}x{height})")
             except Exception as e:
                 self.virtual_cam_enabled = False
@@ -1565,8 +1618,8 @@ class DeepfakeApp(QMainWindow):
         try:
             if self.settings_file.exists():
                 with open(self.settings_file, 'r') as f:
-                    settings = json.load(f)
-                    return settings.get('working_dir', str(Path.home()))
+                    self._settings = json.load(f)
+                    return self._settings.get('working_dir', str(Path.home()))
         except Exception as e:
             logger.warning("Error loading settings: %s", e)
         return str(Path.home())
@@ -1574,13 +1627,57 @@ class DeepfakeApp(QMainWindow):
     def save_settings(self):
         """Save settings to JSON file"""
         try:
-            settings = {
-                'working_dir': self.working_dir
-            }
+            self._settings['working_dir'] = self.working_dir
             with open(self.settings_file, 'w') as f:
-                json.dump(settings, f, indent=2)
+                json.dump(self._settings, f, indent=2)
         except Exception as e:
             logger.warning("Error saving settings: %s", e)
+
+    def _remember(self, key, value):
+        """Save a user choice so the next session starts the same way."""
+        if self._restoring or self._stopping:
+            return
+        self._settings[key] = value
+        self.save_settings()
+
+    def _restore_session(self):
+        """Load the remembered source photos, mode and output options."""
+        self._restoring = True
+        try:
+            mode = self._settings.get("mode")
+            if mode in QUALITY_MODES:
+                self.mode_combo.setCurrentText(mode)
+            if VIRTUAL_CAM_AVAILABLE and "widescreen" in self._settings:
+                self.widescreen_checkbox.setChecked(bool(self._settings["widescreen"]))
+            paths = [p for p in self._settings.get("source_paths", []) if Path(p).exists()]
+            if paths:
+                self._load_source(paths, quiet=True)
+        finally:
+            self._restoring = False
+
+    def _restore_live_state(self):
+        """After Start Camera: turn face swap and the virtual camera back on if they were on last time."""
+        if not self.is_capturing or self.video_thread is None:
+            return
+        self._restoring = True
+        try:
+            if self._settings.get("face_swap") and self.source_face is not None and not self.video_thread.swap_enabled:
+                self.toggle_swap()
+            if (VIRTUAL_CAM_AVAILABLE and self._settings.get("virtual_camera")
+                    and not self.virtual_cam_checkbox.isChecked()):
+                self.virtual_cam_checkbox.setChecked(True)
+        finally:
+            self._restoring = False
+
+    def _toggle_widescreen(self, state):
+        self._remember("widescreen", state == Qt.CheckState.Checked.value)
+        if self.virtual_cam_enabled:  # restart the virtual camera at the new size
+            was_restoring, self._restoring = self._restoring, True
+            try:
+                self.virtual_cam_checkbox.setChecked(False)
+                self.virtual_cam_checkbox.setChecked(True)
+            finally:
+                self._restoring = was_restoring
 
     def open_settings(self):
         """Open settings dialog"""
@@ -1753,6 +1850,11 @@ class DeepfakeApp(QMainWindow):
         """Handle application close event"""
         if self.is_capturing:
             self.stop_camera()
+        # Destroying a QThread that is still running aborts the process; the startup camera
+        # scan takes ~2 s, so closing the window right after opening it could crash.
+        detection = getattr(self, "camera_detection_thread", None)
+        if detection is not None and detection.isRunning():
+            detection.wait(10000)
         # Cancel active model downloads
         for thread in self._active_downloads.values():
             thread.cancel()
