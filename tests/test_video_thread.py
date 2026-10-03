@@ -193,3 +193,26 @@ def test_virtual_camera_receives_every_processed_frame(monkeypatch, qapp, source
     thread.stop()
     # display never acknowledged, yet the virtual camera still gets every processed frame
     assert len(cam.frames) > 10 and len(cam.frames) == len(set(cam.frames))
+
+
+@pytest.mark.skipif(not vt.config.ENHANCER_MODEL.exists(), reason="GFPGAN model not downloaded")
+def test_order_preserved_when_enhancer_toggled(monkeypatch, qapp, source_face):
+    from core.engine.face_enhancer import get_face_enhancer
+
+    get_face_enhancer()  # loaded, so toggling takes effect immediately
+    monkeypatch.setattr(vt.cv2, "VideoCapture", FakeCapture)
+    monkeypatch.setattr(vt.config, "ENHANCE_ENABLED", False)
+    thread = vt.VideoThread(0)
+    thread.set_source_face(source_face)
+    thread.enable_swap(True)
+    stamps = []
+    thread.frame_ready.connect(lambda f: (stamps.append(read_stamp(f)), thread.frame_displayed()),
+                               Qt.ConnectionType.DirectConnection)
+    thread.start()
+    for enhanced in (True, False, True, False):
+        time.sleep(1.0)
+        vt.config.ENHANCE_ENABLED = enhanced
+    time.sleep(1.0)
+    thread.stop()
+    assert len(stamps) > 10
+    assert all(b > a for a, b in zip(stamps, stamps[1:], strict=False)), "frames out of order"
