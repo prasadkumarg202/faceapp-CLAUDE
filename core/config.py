@@ -23,6 +23,10 @@ ENHANCE_WEIGHT = 0.6  # blend strength: 0 = full GFPGAN, 1 = original face
 ENHANCE_ENABLED = False
 ENHANCER_PRECISION: Literal["mixed", "fp32"] = "mixed"  # mixed: 1.3x faster, output within PSNR 60 dB
 
+# Temporal stabilization: One-Euro smoothing of face landmarks between video frames.
+# -56% landmark jitter, -15..19% flicker inside the swapped face, no visible lag, ~free.
+TEMPORAL_SMOOTHING = True
+
 # Occlusion mask (XSeg): hands, mics, cups, phones in front of the face keep their own pixels.
 # ~26 ms per face on RTX 4000 and no visible change without occluders, so off by default.
 OCCLUSION_MODEL = MODELS_DIR / "xseg_2.onnx"

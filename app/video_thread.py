@@ -138,6 +138,9 @@ class VideoThread(QThread):
         """Load models up front so the first detected face doesn't freeze the video for ~1 s"""
         try:
             self.face_analyser = get_live_face_analyser()
+            if getattr(config, "TEMPORAL_SMOOTHING", False):
+                from core.engine.stabilizer import StabilizedAnalyser
+                self.face_analyser = StabilizedAnalyser(self.face_analyser)  # per-session state
         except Exception as e:
             logger.warning("Face analyser unavailable: %s", e)
             self.face_analyser = None

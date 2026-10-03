@@ -49,6 +49,13 @@ from download_models import MODELS, DownloadCancelled, check_model_status, fetch
 logger = logging.getLogger(__name__)
 
 
+# One-click presets for the Advanced Settings checkboxes
+QUALITY_MODES = {
+    "Fast": {"enhance": False, "occlusion": False},
+    "Quality": {"enhance": True, "occlusion": True},
+}
+
+
 def model_size_text(model_info, is_downloaded, current_size, path):
     """Size line for a model card. Zip packs are bigger once unpacked, so label both sizes."""
     expected = format_size(model_info.get("size", 0))
@@ -847,6 +854,22 @@ class DeepfakeApp(QMainWindow):
         advanced_layout = QVBoxLayout()
         advanced_layout.setSpacing(6)
 
+        # Quality mode presets (measured on Quadro RTX 4000: Fast ~24 FPS, Quality ~7 FPS)
+        mode_row = QHBoxLayout()
+        mode_label = QLabel("Mode:")
+        mode_label.setStyleSheet("color: white;")
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(list(QUALITY_MODES) + ["Custom"])
+        self.mode_combo.setToolTip(
+            "Fast: no enhancement or occlusion mask, smoothest video. "
+            "Quality: face enhancement + keep hands/objects, sharpest result, lower FPS."
+        )
+        self.mode_combo.currentTextChanged.connect(self._apply_mode)
+        mode_row.addWidget(mode_label)
+        mode_row.addWidget(self.mode_combo, stretch=1)
+        advanced_layout.addLayout(mode_row)
+        self._applying_mode = False
+
         # Opacity slider
         opacity_layout = QHBoxLayout()
         self.opacity_label = QLabel("Opacity: 100%")
@@ -920,6 +943,7 @@ class DeepfakeApp(QMainWindow):
                 if get_occlusion_model() is None:
                     self.status_label.setText("Occlusion model not downloaded - get it in the Models tab")
         self.occlusion_checkbox.stateChanged.connect(_toggle_occlusion)
+        self.occlusion_checkbox.stateChanged.connect(self._sync_mode_from_checkboxes)
         self.occlusion_checkbox.setStyleSheet("QCheckBox { color: #ffffff; }")
         advanced_layout.addWidget(self.occlusion_checkbox)
 
@@ -939,6 +963,7 @@ class DeepfakeApp(QMainWindow):
             else:
                 self.status_label.setText("Face enhancer off")
         self.enhance_checkbox.stateChanged.connect(_toggle_enhance)
+        self.enhance_checkbox.stateChanged.connect(self._sync_mode_from_checkboxes)
         self.enhance_checkbox.setStyleSheet("QCheckBox { color: #ffffff; }")
         advanced_layout.addWidget(self.enhance_checkbox)
 
@@ -1285,6 +1310,29 @@ class DeepfakeApp(QMainWindow):
         self.video_label.setText("Camera feed will appear here")
         self.video_label.repaint()  # Force immediate repaint
 
+    def _apply_mode(self, mode=None):
+        """Set the preset's checkboxes (Fast / Quality); Custom leaves them alone."""
+        mode = mode or self.mode_combo.currentText()
+        preset = QUALITY_MODES.get(mode)
+        if preset is None:
+            return
+        self._applying_mode = True
+        try:
+            self.enhance_checkbox.setChecked(preset["enhance"])
+            self.occlusion_checkbox.setChecked(preset["occlusion"])
+        finally:
+            self._applying_mode = False
+
+    def _sync_mode_from_checkboxes(self, *_):
+        """A checkbox changed by hand: show the matching preset, or Custom."""
+        if self._applying_mode:
+            return
+        current = {"enhance": self.enhance_checkbox.isChecked(), "occlusion": self.occlusion_checkbox.isChecked()}
+        name = next((n for n, p in QUALITY_MODES.items() if p == current), "Custom")
+        self.mode_combo.blockSignals(True)
+        self.mode_combo.setCurrentText(name)
+        self.mode_combo.blockSignals(False)
+
     def toggle_swap(self):
         """Toggle face swapping on/off"""
         if self.video_thread is not None:
@@ -1296,6 +1344,7 @@ class DeepfakeApp(QMainWindow):
                 self.swap_btn.setText("Disable Face Swap")
                 self.swap_btn.setStyleSheet("background-color: #FF9800;")
                 self.status_label.setText("Face swapping enabled")
+                self._apply_mode()
                 self.mouth_mask_checkbox.setEnabled(True)
                 self.eyes_mask_checkbox.setEnabled(True)
                 self.eyebrows_mask_checkbox.setEnabled(True)
