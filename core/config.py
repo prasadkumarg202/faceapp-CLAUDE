@@ -47,8 +47,8 @@ BUFFALO_L_DIR = INSIGHTFACE_DIR / "buffalo_l"
 
 # Camera settings
 DEFAULT_CAMERA_INDEX = 0
-CAMERA_WIDTH = 640
-CAMERA_HEIGHT = 480
+CAMERA_WIDTH = 1280  # Razer Kiyo: 30 real FPS at 720p; app swaps at ~18 FPS (640x480: 20.8, 1080p: 13.0)
+CAMERA_HEIGHT = 720
 CAMERA_FPS = 30
 
 # Face detection settings

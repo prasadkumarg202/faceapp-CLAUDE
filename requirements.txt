@@ -10,4 +10,5 @@ requests>=2.28.0
 pyvirtualcam>=0.10.0
 
 onnx>=1.16.0
+ml_dtypes==0.5.4  # 0.6.0 is blocked by Windows Smart App Control (Oct 2026)
 onnxconverter-common>=1.14.0
