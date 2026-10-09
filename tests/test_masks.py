@@ -72,3 +72,29 @@ def test_seamless_blending_keeps_chin_tone(face, monkeypatch):
     monkeypatch.setattr(config, "POISSON_BLEND_ENABLED", True)
     seamless = chin(swap_face(source, face, img.copy()))
     assert abs(seamless - plain) < 2.0, f"seamless blending shifted chin brightness by {seamless - plain:+.1f}"
+
+
+def test_jaw_clip_leaves_neck_and_shirt_untouched(face, monkeypatch):
+    """Below the jawline (neck, collar) must keep the camera's pixels; the face is still swapped."""
+    img = cv2.resize(cv2.imread(str(ROOT / "assets" / "vijay.jpg")), (640, 480))
+    source = get_face_analyser().get(cv2.imread(str(ROOT / "assets" / "elon_musk.jpg")))[0]
+    monkeypatch.setattr(config, "JAW_CLIP_ENABLED", True)
+    out = swap_face(source, face, img.copy())
+    jaw = face.landmark_2d_106[0:33]
+    fw = float(np.ptp(jaw[:, 0]))
+    y = int(jaw[:, 1].max() + 0.08 * fw)
+    x0, x1 = int(jaw[:, 0].min()), int(jaw[:, 0].max())
+    below = (slice(y, min(y + 40, img.shape[0])), slice(x0, x1))
+    assert np.abs(out[below].astype(int) - img[below].astype(int)).mean() < 0.5
+    eyes = slice(int(face.kps[:2, 1].min()) - 10, int(face.kps[:2, 1].max()) + 10)
+    assert cv2.absdiff(out[eyes], img[eyes]).mean() > 3, "face was not swapped"
+
+
+def test_jaw_clip_without_landmarks_is_a_no_op():
+    from core.engine.jaw_clip import restore_below_jaw
+
+    class NoLandmarks:
+        landmark_2d_106 = None
+
+    a, b = np.zeros((10, 10, 3), np.uint8), np.full((10, 10, 3), 9, np.uint8)
+    assert restore_below_jaw(a, b, NoLandmarks()) is b

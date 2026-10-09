@@ -49,7 +49,8 @@ def swap_face(source_face, target_face, frame):
     eyebrows_mask_enabled = getattr(config, "EYEBROWS_MASK_ENABLED", False)
 
     occlusion_mask_enabled = getattr(config, "OCCLUSION_MASK_ENABLED", False)
-    original_frame = frame.copy() if (opacity < 1.0 or mouth_mask_enabled or eyes_mask_enabled or eyebrows_mask_enabled or occlusion_mask_enabled) else frame
+    jaw_clip_enabled = getattr(config, "JAW_CLIP_ENABLED", False)
+    original_frame = frame.copy() if (opacity < 1.0 or mouth_mask_enabled or eyes_mask_enabled or eyebrows_mask_enabled or occlusion_mask_enabled or jaw_clip_enabled) else frame
 
     temp_frame = frame
     if temp_frame.dtype != np.uint8:
@@ -69,6 +70,11 @@ def swap_face(source_face, target_face, frame):
     except Exception as e:
         log_throttled(logger, "swap", "Error during swap: %s", e)
         return original_frame
+
+    # Neck, collar and shirt below the jawline keep their original pixels
+    if jaw_clip_enabled:
+        from core.engine.jaw_clip import restore_below_jaw
+        swapped_frame = restore_below_jaw(original_frame, swapped_frame, target_face)
 
     # Objects in front of the face (hands, mics, cups) keep their original pixels
     if occlusion_mask_enabled:

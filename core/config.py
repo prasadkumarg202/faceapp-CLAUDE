@@ -28,6 +28,10 @@ ENHANCE_WEIGHT = 0.6  # blend strength: 0 = full GFPGAN, 1 = original face
 ENHANCE_ENABLED = False
 ENHANCER_PRECISION: Literal["mixed", "fp32"] = "mixed"  # mixed: 1.3x faster, output within PSNR 60 dB
 
+# Keep neck/collar/shirt below the jawline untouched (removes shirt-coloured haze on the chin
+# when the face sits low in the frame). ~1 ms per face.
+JAW_CLIP_ENABLED = True
+
 # Temporal stabilization: One-Euro smoothing of face landmarks between video frames.
 # -56% landmark jitter, -15..19% flicker inside the swapped face, no visible lag, ~free.
 TEMPORAL_SMOOTHING = True
