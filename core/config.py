@@ -32,6 +32,10 @@ ENHANCER_PRECISION: Literal["mixed", "fp32"] = "mixed"  # mixed: 1.3x faster, ou
 # when the face sits low in the frame). ~1 ms per face.
 JAW_CLIP_ENABLED = True
 
+# Natural skin texture: replace the upscaled swap's over-smooth finest detail with the camera's
+# (removes the smooth "layer" look, e.g. a band across the forehead at 720p).
+DETAIL_TRANSFER_ENABLED = True
+
 # Temporal stabilization: One-Euro smoothing of face landmarks between video frames.
 # -56% landmark jitter, -15..19% flicker inside the swapped face, no visible lag, ~free.
 TEMPORAL_SMOOTHING = True

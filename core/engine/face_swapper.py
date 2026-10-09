@@ -50,7 +50,8 @@ def swap_face(source_face, target_face, frame):
 
     occlusion_mask_enabled = getattr(config, "OCCLUSION_MASK_ENABLED", False)
     jaw_clip_enabled = getattr(config, "JAW_CLIP_ENABLED", False)
-    original_frame = frame.copy() if (opacity < 1.0 or mouth_mask_enabled or eyes_mask_enabled or eyebrows_mask_enabled or occlusion_mask_enabled or jaw_clip_enabled) else frame
+    detail_transfer_enabled = getattr(config, "DETAIL_TRANSFER_ENABLED", False)
+    original_frame = frame.copy() if (opacity < 1.0 or mouth_mask_enabled or eyes_mask_enabled or eyebrows_mask_enabled or occlusion_mask_enabled or jaw_clip_enabled or detail_transfer_enabled) else frame
 
     temp_frame = frame
     if temp_frame.dtype != np.uint8:
@@ -70,6 +71,11 @@ def swap_face(source_face, target_face, frame):
     except Exception as e:
         log_throttled(logger, "swap", "Error during swap: %s", e)
         return original_frame
+
+    # Camera's own fine skin texture on the swapped face (no smooth "layer" look)
+    if detail_transfer_enabled:
+        from core.engine.detail_transfer import apply_camera_texture
+        swapped_frame = apply_camera_texture(original_frame, swapped_frame, target_face)
 
     # Neck, collar and shirt below the jawline keep their original pixels
     if jaw_clip_enabled:

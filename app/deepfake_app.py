@@ -939,6 +939,22 @@ class DeepfakeApp(QMainWindow):
         self.poisson_blend_checkbox.setStyleSheet("QCheckBox { color: #ffffff; }")
         advanced_layout.addWidget(self.poisson_blend_checkbox)
 
+        # Natural skin texture checkbox
+        self.texture_checkbox = QCheckBox("Natural Skin Texture")
+        self.texture_checkbox.setToolTip(
+            "Gives the swapped face the camera's real skin texture, so it doesn't look like a smooth "
+            "layer (e.g. a band across the forehead). A few ms per frame."
+        )
+        from core import config as _cfg_texture
+        self.texture_checkbox.setChecked(_cfg_texture.DETAIL_TRANSFER_ENABLED)
+        def _toggle_texture(state):
+            from core import config
+            config.DETAIL_TRANSFER_ENABLED = (state == Qt.CheckState.Checked.value)
+            self._remember("texture", config.DETAIL_TRANSFER_ENABLED)
+        self.texture_checkbox.stateChanged.connect(_toggle_texture)
+        self.texture_checkbox.setStyleSheet("QCheckBox { color: #ffffff; }")
+        advanced_layout.addWidget(self.texture_checkbox)
+
         # Occlusion mask checkbox
         self.occlusion_checkbox = QCheckBox("Keep Hands/Objects in Front of Face (slower)")
         self.occlusion_checkbox.setToolTip(
@@ -1653,6 +1669,8 @@ class DeepfakeApp(QMainWindow):
             mode = self._settings.get("mode")
             if mode in QUALITY_MODES:
                 self.mode_combo.setCurrentText(mode)
+            if "texture" in self._settings:
+                self.texture_checkbox.setChecked(bool(self._settings["texture"]))
             if VIRTUAL_CAM_AVAILABLE and "widescreen" in self._settings:
                 self.widescreen_checkbox.setChecked(bool(self._settings["widescreen"]))
             paths = [p for p in self._settings.get("source_paths", []) if Path(p).exists()]

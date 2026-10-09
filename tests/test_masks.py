@@ -98,3 +98,22 @@ def test_jaw_clip_without_landmarks_is_a_no_op():
 
     a, b = np.zeros((10, 10, 3), np.uint8), np.full((10, 10, 3), 9, np.uint8)
     assert restore_below_jaw(a, b, NoLandmarks()) is b
+
+
+def test_camera_texture_restores_real_skin_detail(face, monkeypatch):
+    """The upscaled swap is far smoother than real skin; the camera's fine detail is put back."""
+    img = cv2.resize(cv2.imread(str(ROOT / "assets" / "vijay.jpg")), (1280, 960))  # upscale like a 720p face
+    big = get_live_face_analyser().get(img)[0]
+    source = get_face_analyser().get(cv2.imread(str(ROOT / "assets" / "elon_musk.jpg")))[0]
+
+    def texture(im):
+        x1, y1, x2, y2 = big.bbox.astype(int)
+        patch = im[y1 + (y2 - y1) // 10:y1 + (y2 - y1) // 4, x1 + (x2 - x1) // 3:x2 - (x2 - x1) // 3]
+        return cv2.Laplacian(cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY), cv2.CV_32F).var()
+
+    monkeypatch.setattr(config, "DETAIL_TRANSFER_ENABLED", False)
+    plain = swap_face(source, big, img.copy())
+    monkeypatch.setattr(config, "DETAIL_TRANSFER_ENABLED", True)
+    textured = swap_face(source, big, img.copy())
+    assert texture(textured) > 3 * texture(plain), "camera texture was not restored"
+    assert np.array_equal(textured[:, :40], img[:, :40]), "background far from the face changed"
